@@ -25,13 +25,20 @@ def create_job(
 
 
 @router.get("", response_model=list[JobRead])
-def list_jobs(db: Session = Depends(get_db)) -> list[JobRead]:
-    return job_service.list_jobs(db)
+def list_jobs(
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> list[JobRead]:
+    return job_service.list_jobs(db, settings)
 
 
 @router.get("/{job_id}", response_model=JobRead)
-def get_job(job_id: str, db: Session = Depends(get_db)) -> JobRead:
-    job = job_service.get_job(db, job_id)
+def get_job(
+    job_id: str,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> JobRead:
+    job = job_service.get_job(db, settings, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
@@ -43,7 +50,7 @@ def run_job(
     db: Session = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> JobRead:
-    job = job_service.get_job(db, job_id)
+    job = job_service.get_job(db, settings, job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     try:

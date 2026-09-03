@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.k8s.orchestrator import submit_job
+from app.k8s.orchestrator import get_k8s_job, submit_job
 from app.models.job import Job, JobStatus
 from app.services.partitioner import partition_csv
 
@@ -72,12 +72,16 @@ def create_job(db: Session, settings: Settings, file: UploadFile, worker_count: 
     return job
 
 
-def get_job(db: Session, job_id: str) -> Job | None:
-    return db.get(Job, job_id)
+def get_job(db: Session, settings: Settings, job_id: str) -> Job | None:
+    job = db.get(Job, job_id)
+    if job is not None:
+        job = reconcile_status(db, settings, job)
+    return job
 
 
-def list_jobs(db: Session) -> list[Job]:
-    return list(db.scalars(select(Job).order_by(Job.created_at.desc())))
+def list_jobs(db: Session, settings: Settings) -> list[Job]:
+    jobs = list(db.scalars(select(Job).order_by(Job.created_at.desc())))
+    return [reconcile_status(db, settings, job) for job in jobs]
 
 
 def chunks_dir(job: Job) -> Path:
@@ -106,4 +110,33 @@ def run_job(db: Session, settings: Settings, job: Job) -> Job:
     job.status = JobStatus.RUNNING
     db.commit()
     db.refresh(job)
+    return job
+
+
+def reconcile_status(db: Session, settings: Settings, job: Job) -> Job:
+    """Refresh a Running job's status from the live Kubernetes Job state.
+    Pending/Completed/Failed jobs are terminal from our side and skipped -
+    a Completed/Failed job's Kubernetes Job may since have been cleaned up.
+    """
+    if job.status != JobStatus.RUNNING:
+        return job
+
+    k8s_job = get_k8s_job(job, settings)
+    if k8s_job is None or k8s_job.status is None:
+        return job
+
+    conditions = k8s_job.status.conditions or []
+    failed = next((c for c in conditions if c.type == "Failed" and c.status == "True"), None)
+    complete = next((c for c in conditions if c.type == "Complete" and c.status == "True"), None)
+
+    if failed is not None:
+        job.status = JobStatus.FAILED
+        job.error_message = failed.message or "One or more worker pods failed"
+        db.commit()
+        db.refresh(job)
+    elif complete is not None:
+        job.status = JobStatus.COMPLETED
+        db.commit()
+        db.refresh(job)
+
     return job
