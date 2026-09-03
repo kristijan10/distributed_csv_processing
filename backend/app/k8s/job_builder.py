@@ -54,6 +54,7 @@ def build_job_manifest(job: Job, settings: Settings) -> client.V1Job:
         parallelism=job.worker_count,
         completion_mode="Indexed",
         backoff_limit=0,
+        active_deadline_seconds=settings.job_active_deadline_seconds,
         template=pod_template,
     )
 

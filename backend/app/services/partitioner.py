@@ -14,13 +14,17 @@ def partition_csv(input_path: str | Path, output_dir: str | Path, worker_count: 
     input_path = Path(input_path)
     output_dir = Path(output_dir)
 
-    with input_path.open(newline="", encoding="utf-8", errors="replace") as f:
+    with input_path.open(newline="", encoding="utf-8-sig", errors="replace") as f:
         reader = csv.reader(f)
         try:
             header = next(reader)
         except StopIteration:
             raise PartitionError("CSV file is empty") from None
         rows = list(reader)
+
+    for line_num, row in enumerate(rows, start=2):
+        if len(row) != len(header):
+            raise PartitionError(f"Row {line_num} has {len(row)} columns, expected {len(header)} (based on the header)")
 
     row_count = len(rows)
     if worker_count < 1:

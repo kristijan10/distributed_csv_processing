@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.k8s.orchestrator import delete_k8s_job, get_k8s_job, submit_job
+from app.k8s.orchestrator import JobAlreadySubmittedError, delete_k8s_job, get_k8s_job, submit_job
 from app.models.job import Job, JobStatus
 from app.services.aggregator import AggregationError, aggregate_csv
 from app.services.partitioner import partition_csv
@@ -22,13 +22,20 @@ class JobValidationError(Exception):
 
 
 def _count_data_rows(csv_path: Path) -> int:
-    with csv_path.open(newline="", encoding="utf-8", errors="replace") as f:
+    with csv_path.open(newline="", encoding="utf-8-sig", errors="replace") as f:
         reader = csv.reader(f)
         try:
-            next(reader)  # header
+            header = next(reader)
         except StopIteration:
             return -1  # empty file, no header at all
-        return sum(1 for _ in reader)
+        count = 0
+        for line_num, row in enumerate(reader, start=2):
+            if len(row) != len(header):
+                raise JobValidationError(
+                    f"Row {line_num} has {len(row)} columns, expected {len(header)} (based on the header)"
+                )
+            count += 1
+        return count
 
 
 def create_job(db: Session, settings: Settings, file: UploadFile, worker_count: int) -> Job:
@@ -133,7 +140,10 @@ def run_job(db: Session, settings: Settings, job: Job) -> Job:
         raise JobValidationError(f"Job is not pending (status={job.status.value})")
 
     partition_job(job)
-    submit_job(job, settings)
+    try:
+        submit_job(job, settings)
+    except JobAlreadySubmittedError as exc:
+        raise JobValidationError("Job is already running") from exc
 
     job.status = JobStatus.RUNNING
     db.commit()

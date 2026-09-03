@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     # `minikube mount <storage_dir>:<data_mount_path>` for local dev.
     data_mount_path: str = "/data"
 
+    # Upper bound on how long a Job may run before Kubernetes force-fails it.
+    # Without this, a Job whose pods never reach a terminal phase (e.g. stuck
+    # in ImagePullBackOff or Pending) has no Failed condition to reconcile on
+    # and stays Running forever.
+    job_active_deadline_seconds: int = 300
+
     class Config:
         env_file = ".env"
 
