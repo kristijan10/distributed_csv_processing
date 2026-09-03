@@ -1,8 +1,10 @@
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
 from app.core.db import get_db
+from app.models.job import JobStatus
 from app.schemas.job import JobRead
 from app.services import job_service
 from app.services.job_service import JobValidationError
@@ -58,3 +60,19 @@ def run_job(
     except JobValidationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return job
+
+
+@router.get("/{job_id}/result")
+def download_result(
+    job_id: str,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> FileResponse:
+    job = job_service.get_job(db, settings, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != JobStatus.COMPLETED or not job.result_path:
+        raise HTTPException(status_code=409, detail=f"Job result not available (status={job.status.value})")
+
+    stem = job.original_filename.rsplit(".", 1)[0]
+    return FileResponse(job.result_path, media_type="text/csv", filename=f"{stem}_result.csv")

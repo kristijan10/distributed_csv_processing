@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.k8s.orchestrator import get_k8s_job, submit_job
 from app.models.job import Job, JobStatus
+from app.services.aggregator import AggregationError, aggregate_csv
 from app.services.partitioner import partition_csv
 
 
@@ -100,6 +101,16 @@ def partition_job(job: Job) -> list[Path]:
     return partition_csv(job.input_path, chunks_dir(job), job.worker_count)
 
 
+def result_paths(job: Job) -> list[Path]:
+    d = results_dir(job)
+    return [d / f"result_{i:03d}.csv" for i in range(job.worker_count)]
+
+
+def aggregate_job(job: Job) -> Path:
+    output_path = Path(job.input_path).parent / "output.csv"
+    return aggregate_csv(result_paths(job), output_path)
+
+
 def run_job(db: Session, settings: Settings, job: Job) -> Job:
     if job.status != JobStatus.PENDING:
         raise JobValidationError(f"Job is not pending (status={job.status.value})")
@@ -135,7 +146,13 @@ def reconcile_status(db: Session, settings: Settings, job: Job) -> Job:
         db.commit()
         db.refresh(job)
     elif complete is not None:
-        job.status = JobStatus.COMPLETED
+        try:
+            output_path = aggregate_job(job)
+            job.result_path = str(output_path)
+            job.status = JobStatus.COMPLETED
+        except AggregationError as exc:
+            job.status = JobStatus.FAILED
+            job.error_message = f"Aggregation failed: {exc}"
         db.commit()
         db.refresh(job)
 
