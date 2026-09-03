@@ -1,4 +1,5 @@
 import csv
+import logging
 import shutil
 import uuid
 from pathlib import Path
@@ -8,10 +9,12 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.k8s.orchestrator import get_k8s_job, submit_job
+from app.k8s.orchestrator import delete_k8s_job, get_k8s_job, submit_job
 from app.models.job import Job, JobStatus
 from app.services.aggregator import AggregationError, aggregate_csv
 from app.services.partitioner import partition_csv
+
+logger = logging.getLogger(__name__)
 
 
 class JobValidationError(Exception):
@@ -111,6 +114,20 @@ def aggregate_job(job: Job) -> Path:
     return aggregate_csv(result_paths(job), output_path)
 
 
+def cleanup_job(job: Job, settings: Settings) -> None:
+    """Best-effort teardown for a finished job: delete its Kubernetes Job
+    (cascading to Pods) and the intermediate chunk/result files. input.csv
+    and output.csv are kept - the latter is what /result downloads.
+    """
+    try:
+        delete_k8s_job(job, settings)
+    except Exception:
+        logger.exception("Failed to delete Kubernetes Job for job %s", job.id)
+
+    shutil.rmtree(chunks_dir(job), ignore_errors=True)
+    shutil.rmtree(results_dir(job), ignore_errors=True)
+
+
 def run_job(db: Session, settings: Settings, job: Job) -> Job:
     if job.status != JobStatus.PENDING:
         raise JobValidationError(f"Job is not pending (status={job.status.value})")
@@ -145,6 +162,7 @@ def reconcile_status(db: Session, settings: Settings, job: Job) -> Job:
         job.error_message = failed.message or "One or more worker pods failed"
         db.commit()
         db.refresh(job)
+        cleanup_job(job, settings)
     elif complete is not None:
         try:
             output_path = aggregate_job(job)
@@ -155,5 +173,6 @@ def reconcile_status(db: Session, settings: Settings, job: Job) -> Job:
             job.error_message = f"Aggregation failed: {exc}"
         db.commit()
         db.refresh(job)
+        cleanup_job(job, settings)
 
     return job

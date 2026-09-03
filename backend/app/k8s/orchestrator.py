@@ -1,4 +1,4 @@
-from kubernetes.client import V1Job
+from kubernetes.client import V1DeleteOptions, V1Job
 from kubernetes.client.exceptions import ApiException
 
 from app.core.config import Settings
@@ -22,3 +22,17 @@ def get_k8s_job(job: Job, settings: Settings) -> V1Job | None:
         if exc.status == 404:
             return None
         raise
+
+
+def delete_k8s_job(job: Job, settings: Settings) -> None:
+    """Delete the Job, cascading to its Pods. No-op if already gone."""
+    api = batch_v1_api()
+    try:
+        api.delete_namespaced_job(
+            name=k8s_job_name(job),
+            namespace=settings.kube_namespace,
+            body=V1DeleteOptions(propagation_policy="Background"),
+        )
+    except ApiException as exc:
+        if exc.status != 404:
+            raise
