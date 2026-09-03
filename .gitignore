@@ -5,8 +5,9 @@ backend/**/__pycache__/
 backend/*.egg-info/
 backend/.env
 
-# Backend runtime storage (uploaded CSVs, chunks, results)
+# Backend runtime storage (uploaded CSVs, chunks, results) and local DB
 backend/storage/
+backend/app.db
 
 # Node / frontend
 frontend/node_modules/

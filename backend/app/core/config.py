@@ -14,6 +14,12 @@ class Settings(BaseSettings):
     # Where uploaded CSVs, partitioned chunks, and results are stored on the backend host.
     storage_dir: str = "./storage"
 
+    # Job metadata persistence.
+    database_url: str = "sqlite:///./app.db"
+
+    # Sanity bound on user-chosen worker count (not a resource/CPU/RAM config).
+    max_workers_per_job: int = 32
+
     class Config:
         env_file = ".env"
 

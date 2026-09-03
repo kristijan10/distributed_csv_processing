@@ -3,3 +3,4 @@ uvicorn[standard]==0.34.0
 python-multipart==0.0.20
 pydantic-settings==2.7.1
 kubernetes==31.0.0
+sqlalchemy==2.0.36
