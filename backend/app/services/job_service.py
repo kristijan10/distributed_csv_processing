@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.models.job import Job, JobStatus
+from app.services.partitioner import partition_csv
 
 
 class JobValidationError(Exception):
@@ -76,3 +77,15 @@ def get_job(db: Session, job_id: str) -> Job | None:
 
 def list_jobs(db: Session) -> list[Job]:
     return list(db.scalars(select(Job).order_by(Job.created_at.desc())))
+
+
+def chunks_dir(job: Job) -> Path:
+    return Path(job.input_path).parent / "chunks"
+
+
+def partition_job(job: Job) -> list[Path]:
+    """Split a job's uploaded CSV into per-worker chunk files. Chunk i is
+    the input for worker i; the Kubernetes orchestration step (next
+    milestone) hands each pod its corresponding chunk path.
+    """
+    return partition_csv(job.input_path, chunks_dir(job), job.worker_count)
