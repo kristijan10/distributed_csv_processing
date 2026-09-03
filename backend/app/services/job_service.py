@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
+from app.k8s.orchestrator import submit_job
 from app.models.job import Job, JobStatus
 from app.services.partitioner import partition_csv
 
@@ -83,9 +84,26 @@ def chunks_dir(job: Job) -> Path:
     return Path(job.input_path).parent / "chunks"
 
 
+def results_dir(job: Job) -> Path:
+    return Path(job.input_path).parent / "results"
+
+
 def partition_job(job: Job) -> list[Path]:
     """Split a job's uploaded CSV into per-worker chunk files. Chunk i is
-    the input for worker i; the Kubernetes orchestration step (next
-    milestone) hands each pod its corresponding chunk path.
+    the input for worker i; the Kubernetes orchestration step hands each
+    pod its corresponding chunk path.
     """
     return partition_csv(job.input_path, chunks_dir(job), job.worker_count)
+
+
+def run_job(db: Session, settings: Settings, job: Job) -> Job:
+    if job.status != JobStatus.PENDING:
+        raise JobValidationError(f"Job is not pending (status={job.status.value})")
+
+    partition_job(job)
+    submit_job(job, settings)
+
+    job.status = JobStatus.RUNNING
+    db.commit()
+    db.refresh(job)
+    return job

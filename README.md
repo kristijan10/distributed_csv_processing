@@ -30,3 +30,23 @@ App available at http://localhost:5173.
 minikube start --driver=docker
 kubectl get nodes
 ```
+
+### Shared storage mount (required for job execution)
+Worker pods need to see the CSV chunks the backend writes to `backend/storage/`.
+minikube's only live mount mechanism is a 9p filesystem bridge; start it and
+leave it running in the background whenever you want to run jobs:
+```bash
+minikube mount backend/storage:/data
+```
+This must stay running for `POST /api/jobs/{id}/run` to work — worker pods
+mount `/data` as a hostPath volume and read/write under it.
+
+### Worker image
+The worker container (`worker/`) is built on the host and imported into the
+cluster's image store (minikube here runs containerd, not Docker, so
+`docker-env` doesn't apply):
+```bash
+docker build -t batch-worker:latest worker/
+minikube image load batch-worker:latest
+```
+Rebuild and reload after any change to `worker/main.py`.

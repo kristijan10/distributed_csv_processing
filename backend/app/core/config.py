@@ -20,6 +20,13 @@ class Settings(BaseSettings):
     # Sanity bound on user-chosen worker count (not a resource/CPU/RAM config).
     max_workers_per_job: int = 32
 
+    # Worker container image (built and `minikube image load`-ed locally; see worker/).
+    worker_image: str = "batch-worker:latest"
+
+    # Path where storage_dir is made visible inside the cluster, via
+    # `minikube mount <storage_dir>:<data_mount_path>` for local dev.
+    data_mount_path: str = "/data"
+
     class Config:
         env_file = ".env"
 

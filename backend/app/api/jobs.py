@@ -35,3 +35,19 @@ def get_job(job_id: str, db: Session = Depends(get_db)) -> JobRead:
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
+
+
+@router.post("/{job_id}/run", response_model=JobRead)
+def run_job(
+    job_id: str,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> JobRead:
+    job = job_service.get_job(db, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    try:
+        job = job_service.run_job(db, settings, job)
+    except JobValidationError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return job
