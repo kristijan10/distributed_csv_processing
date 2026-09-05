@@ -23,6 +23,7 @@ export default function JobList({ jobs }) {
           <tr>
             <th className="px-4 py-3 font-medium">File</th>
             <th className="px-4 py-3 font-medium">Status</th>
+            <th className="px-4 py-3 font-medium">Workers</th>
             <th className="px-4 py-3 font-medium">Duration</th>
             <th className="px-4 py-3 font-medium">Result</th>
           </tr>
@@ -52,6 +53,7 @@ export default function JobList({ jobs }) {
                   </p>
                 )}
               </td>
+              <td className="px-4 py-3 text-slate-500 dark:text-slate-400">{job.worker_count}</td>
               <td className="px-4 py-3 text-slate-500 dark:text-slate-400">
                 {formatDuration(job.created_at, job.finished_at) ?? (
                   <span className="text-slate-300 dark:text-slate-600">—</span>
