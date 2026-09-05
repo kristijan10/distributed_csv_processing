@@ -80,3 +80,18 @@ source .venv/bin/activate
 python scripts/e2e_demo.py
 ```
 Prints PASS/FAIL per check and exits non-zero if anything failed.
+
+## Troubleshooting
+
+**`POST /api/jobs/{id}/run` (or any job action) returns 503 "Could not
+reach the Kubernetes cluster"** — the backend can talk to the API but the
+cluster isn't there. Most common cause: `minikube stop` can leave
+`~/.kube/config`'s `current-context` empty. Fix: `minikube start` (safe to
+re-run; it also restores the kubeconfig entry), then `kubectl get nodes` to
+confirm.
+
+**Browser console shows a CORS error alongside a `500`** — this is almost
+always a red herring: an unhandled backend exception produced a `500`
+whose response didn't carry CORS headers, and the browser reports that as
+a CORS failure instead of showing the real error. Check the backend's own
+logs/terminal for the actual traceback rather than chasing CORS config.
