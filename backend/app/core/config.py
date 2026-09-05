@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     # and stays Running forever.
     job_active_deadline_seconds: int = 300
 
+    # Temporary experiment switch: when true, workers skip the per-row
+    # transform and echo their chunk back unchanged, to isolate I/O time
+    # from compute time in the worker-count sweep.
+    noop_transform: bool = False
+
     class Config:
         env_file = ".env"
 

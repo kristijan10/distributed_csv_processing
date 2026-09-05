@@ -24,6 +24,7 @@ def build_job_manifest(job: Job, settings: Settings) -> client.V1Job:
                 )
             ),
         ),
+        client.V1EnvVar(name="NOOP_TRANSFORM", value="1" if settings.noop_transform else "0"),
     ]
 
     volume = client.V1Volume(
