@@ -1,4 +1,4 @@
-# Distributed Batch Processing Platform (Thesis Project)
+# Distributed batch processing system in the cloud (Thesis Project)
 
 Cloud-native platform demonstrating distributed batch data processing using Docker containers and Kubernetes orchestration. See [thesis-project-context.md](thesis-project-context.md) for full scope.
 
