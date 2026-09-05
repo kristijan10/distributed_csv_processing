@@ -47,6 +47,28 @@ def make_k8s_job(conditions):
     return SimpleNamespace(status=SimpleNamespace(conditions=conditions))
 
 
+def make_pod(index, phase="Succeeded", reason=None, exit_code=0, pod_name=None):
+    if reason is not None or exit_code is not None:
+        state = SimpleNamespace(
+            terminated=SimpleNamespace(
+                reason=reason, message=None, exit_code=exit_code, started_at=None, finished_at=None
+            ),
+            waiting=None,
+            running=None,
+        )
+        container_statuses = [SimpleNamespace(state=state)]
+    else:
+        container_statuses = None
+
+    return SimpleNamespace(
+        metadata=SimpleNamespace(
+            name=pod_name or f"pod-{index}",
+            annotations={"batch.kubernetes.io/job-completion-index": str(index)},
+        ),
+        status=SimpleNamespace(phase=phase, start_time=None, container_statuses=container_statuses),
+    )
+
+
 def write_results(job, rows_per_worker=2):
     results_dir = job_service.results_dir(job)
     results_dir.mkdir(parents=True, exist_ok=True)
@@ -148,9 +170,11 @@ def test_reconcile_status_transitions_to_failed_and_cleans_up(db_session, settin
     (job_service.chunks_dir(job) / "chunk_000.csv").write_text("id\n1\n")
 
     fake_job = make_k8s_job([make_condition("Failed", message="Job was active longer than specified deadline")])
+    fake_pods = [make_pod(0, phase="Failed", reason="Error", exit_code=1), make_pod(1, phase="Succeeded")]
     with (
         patch("app.services.job_service.get_k8s_job", return_value=fake_job),
         patch("app.services.job_service.delete_k8s_job") as mock_delete,
+        patch("app.services.job_service.list_worker_pods", return_value=fake_pods),
     ):
         result = job_service.reconcile_status(db_session, settings, job)
 
@@ -158,6 +182,8 @@ def test_reconcile_status_transitions_to_failed_and_cleans_up(db_session, settin
     assert result.error_message == "Job was active longer than specified deadline"
     mock_delete.assert_called_once()
     assert not job_service.chunks_dir(job).exists()
+    assert [w["reason"] for w in result.worker_snapshot] == ["Error", None]
+    assert result.worker_snapshot[1]["phase"] == "Succeeded"
 
 
 def test_reconcile_status_transitions_to_completed_and_aggregates(db_session, settings):
@@ -167,9 +193,11 @@ def test_reconcile_status_transitions_to_completed_and_aggregates(db_session, se
     write_results(job, rows_per_worker=2)
 
     fake_job = make_k8s_job([make_condition("Complete")])
+    fake_pods = [make_pod(0, phase="Succeeded"), make_pod(1, phase="Succeeded")]
     with (
         patch("app.services.job_service.get_k8s_job", return_value=fake_job),
         patch("app.services.job_service.delete_k8s_job") as mock_delete,
+        patch("app.services.job_service.list_worker_pods", return_value=fake_pods),
     ):
         result = job_service.reconcile_status(db_session, settings, job)
 
@@ -181,6 +209,8 @@ def test_reconcile_status_transitions_to_completed_and_aggregates(db_session, se
     mock_delete.assert_called_once()
     assert not job_service.results_dir(job).exists()
     assert Path(result.result_path).exists()  # output.csv itself must survive cleanup
+    assert len(result.worker_snapshot) == 2
+    assert all(w["phase"] == "Succeeded" for w in result.worker_snapshot)
 
 
 def test_reconcile_status_aggregation_failure_marks_job_failed(db_session, settings):
@@ -193,12 +223,64 @@ def test_reconcile_status_aggregation_failure_marks_job_failed(db_session, setti
     with (
         patch("app.services.job_service.get_k8s_job", return_value=fake_job),
         patch("app.services.job_service.delete_k8s_job") as mock_delete,
+        patch("app.services.job_service.list_worker_pods", return_value=[]),
     ):
         result = job_service.reconcile_status(db_session, settings, job)
 
     assert result.status == JobStatus.FAILED
     assert "Aggregation failed" in result.error_message
     mock_delete.assert_called_once()  # cleanup still runs even when aggregation fails
+
+
+# --- get_job_workers ---
+
+
+def test_get_job_workers_pending_job_returns_empty(db_session, settings):
+    job = make_job(db_session, settings)  # still Pending
+    with patch("app.services.job_service.list_worker_pods") as mock_list:
+        result = job_service.get_job_workers(job, settings)
+
+    mock_list.assert_not_called()
+    assert result == []
+
+
+def test_get_job_workers_running_job_queries_live_pods(db_session, settings):
+    job = make_job(db_session, settings, worker_count=2)
+    job.status = JobStatus.RUNNING
+    db_session.commit()
+
+    fake_pods = [make_pod(0, phase="Running", reason=None, exit_code=None), make_pod(1, phase="Pending")]
+    with patch("app.services.job_service.list_worker_pods", return_value=fake_pods):
+        result = job_service.get_job_workers(job, settings)
+
+    assert [w["index"] for w in result] == [0, 1]
+    assert result[0]["phase"] == "Running"
+    assert result[1]["phase"] == "Pending"
+
+
+def test_get_job_workers_running_job_falls_back_to_snapshot_when_k8s_unavailable(db_session, settings):
+    job = make_job(db_session, settings)
+    job.status = JobStatus.RUNNING
+    job.worker_snapshot = [{"index": 0, "phase": "Running"}]
+    db_session.commit()
+
+    with patch("app.services.job_service.list_worker_pods", side_effect=KubernetesUnavailableError("boom")):
+        result = job_service.get_job_workers(job, settings)
+
+    assert result == [{"index": 0, "phase": "Running"}]
+
+
+def test_get_job_workers_finished_job_returns_persisted_snapshot(db_session, settings):
+    job = make_job(db_session, settings)
+    job.status = JobStatus.COMPLETED
+    job.worker_snapshot = [{"index": 0, "phase": "Succeeded"}]
+    db_session.commit()
+
+    with patch("app.services.job_service.list_worker_pods") as mock_list:
+        result = job_service.get_job_workers(job, settings)
+
+    mock_list.assert_not_called()
+    assert result == [{"index": 0, "phase": "Succeeded"}]
 
 
 # --- cleanup_job ---

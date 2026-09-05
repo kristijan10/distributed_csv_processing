@@ -10,6 +10,16 @@ settings = get_settings()
 
 Base.metadata.create_all(bind=engine)
 
+# create_all() only creates missing tables, not missing columns on existing
+# ones - add columns introduced after the table already existed on disk.
+if settings.database_url.startswith("sqlite"):
+    with engine.begin() as conn:
+        existing_columns = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(jobs)")}
+        if "finished_at" not in existing_columns:
+            conn.exec_driver_sql("ALTER TABLE jobs ADD COLUMN finished_at DATETIME")
+        if "worker_snapshot" not in existing_columns:
+            conn.exec_driver_sql("ALTER TABLE jobs ADD COLUMN worker_snapshot JSON")
+
 app = FastAPI(title=settings.app_name)
 
 app.add_middleware(

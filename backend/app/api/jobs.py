@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings, get_settings
 from app.core.db import get_db
 from app.models.job import JobStatus
-from app.schemas.job import JobRead
+from app.schemas.job import JobRead, WorkerStatus
 from app.k8s.orchestrator import KubernetesUnavailableError
 from app.services import job_service
 from app.services.job_service import JobValidationError
@@ -45,6 +45,18 @@ def get_job(
     if job is None:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
+
+
+@router.get("/{job_id}/workers", response_model=list[WorkerStatus])
+def get_job_workers(
+    job_id: str,
+    db: Session = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> list[WorkerStatus]:
+    job = job_service.get_job(db, settings, job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job_service.get_job_workers(job, settings)
 
 
 @router.post("/{job_id}/run", response_model=JobRead)

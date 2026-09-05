@@ -2,6 +2,7 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
+from sqlalchemy import JSON
 from sqlalchemy import Enum as SAEnum
 from sqlalchemy import Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
@@ -38,5 +39,11 @@ class Job(Base):
     result_path: Mapped[str | None] = mapped_column(String, nullable=True)
     error_message: Mapped[str | None] = mapped_column(String, nullable=True)
 
+    # Per-worker pod status, captured right before a finished job's Kubernetes
+    # Job (and its pods) are torn down by cleanup_job - without this snapshot,
+    # per-worker outcomes would be unrecoverable once cleanup runs.
+    worker_snapshot: Mapped[list | None] = mapped_column(JSON, nullable=True, default=None)
+
     created_at: Mapped[datetime] = mapped_column(default=_utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(default=_utcnow, onupdate=_utcnow, nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(nullable=True, default=None)

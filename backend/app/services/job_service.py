@@ -1,6 +1,8 @@
 import csv
 import logging
 import shutil
+import threading
+import time
 import uuid
 from pathlib import Path
 
@@ -8,15 +10,19 @@ from fastapi import UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from kubernetes.client import V1Pod
+
 from app.core.config import Settings
+from app.k8s.job_builder import JOB_COMPLETION_INDEX_ANNOTATION
 from app.k8s.orchestrator import (
     JobAlreadySubmittedError,
     KubernetesUnavailableError,
     delete_k8s_job,
     get_k8s_job,
+    list_worker_pods,
     submit_job,
 )
-from app.models.job import Job, JobStatus
+from app.models.job import Job, JobStatus, _utcnow
 from app.services.aggregator import AggregationError, aggregate_csv
 from app.services.partitioner import partition_csv
 
@@ -25,6 +31,21 @@ logger = logging.getLogger(__name__)
 
 class JobValidationError(Exception):
     pass
+
+
+# FastAPI runs sync path operations in a threadpool, and the frontend polls
+# GET /api/jobs on a fixed interval - for a job whose aggregation takes
+# longer than that interval, two overlapping polls can both see status
+# RUNNING and race to aggregate/commit the same job's terminal state. One
+# lock per job id serializes reconcile_status so only one poll ever drives
+# a given job's RUNNING -> terminal transition.
+_job_locks: dict[str, threading.Lock] = {}
+_job_locks_guard = threading.Lock()
+
+
+def _lock_for(job_id: str) -> threading.Lock:
+    with _job_locks_guard:
+        return _job_locks.setdefault(job_id, threading.Lock())
 
 
 def _count_data_rows(csv_path: Path) -> int:
@@ -122,9 +143,106 @@ def result_paths(job: Job) -> list[Path]:
     return [d / f"result_{i:03d}.csv" for i in range(job.worker_count)]
 
 
+def _wait_for_result_files(paths: list[Path], timeout: float = 15.0, interval: float = 0.2) -> None:
+    """Poll for result files to appear before aggregating. `minikube mount`'s
+    userspace 9p bridge can lag briefly between a worker pod exiting
+    successfully and its output file becoming visible on the host side,
+    especially under concurrent write load from many workers - so a file
+    missing right after the Kubernetes Job reports Complete may just not
+    have propagated through the bridge yet, not be truly absent.
+    """
+    deadline = time.monotonic() + timeout
+    for path in paths:
+        while not path.exists() and time.monotonic() < deadline:
+            time.sleep(interval)
+
+
+def _pod_completion_index(pod: V1Pod) -> int | None:
+    annotations = pod.metadata.annotations or {}
+    value = annotations.get(JOB_COMPLETION_INDEX_ANNOTATION)
+    return int(value) if value is not None else None
+
+
+def _worker_status_from_pod(pod: V1Pod) -> dict:
+    status = pod.status
+    phase = (status.phase if status else None) or "Unknown"
+    reason = None
+    message = None
+    exit_code = None
+    started_at = status.start_time if status else None
+    finished_at = None
+
+    container_statuses = status.container_statuses if status else None
+    if container_statuses:
+        state = container_statuses[0].state
+        if state.terminated:
+            reason = state.terminated.reason
+            message = state.terminated.message
+            exit_code = state.terminated.exit_code
+            started_at = state.terminated.started_at or started_at
+            finished_at = state.terminated.finished_at
+        elif state.waiting:
+            reason = state.waiting.reason
+            message = state.waiting.message
+        elif state.running:
+            reason = "Running"
+            started_at = state.running.started_at or started_at
+
+    return {
+        "index": _pod_completion_index(pod),
+        "pod_name": pod.metadata.name,
+        "phase": phase,
+        "reason": reason,
+        "message": message,
+        "exit_code": exit_code,
+        "started_at": started_at.isoformat() if started_at else None,
+        "finished_at": finished_at.isoformat() if finished_at else None,
+    }
+
+
+def _capture_worker_snapshot(job: Job, settings: Settings) -> list[dict] | None:
+    """Best-effort snapshot of per-worker pod status, taken right before a
+    finished job's Kubernetes Job (and its pods) get torn down by
+    cleanup_job. Without this, per-worker outcomes would be unrecoverable
+    once cleanup runs.
+    """
+    try:
+        pods = list_worker_pods(job, settings)
+    except KubernetesUnavailableError:
+        logger.warning("Kubernetes unreachable while snapshotting workers for job %s", job.id)
+        return None
+
+    statuses = [_worker_status_from_pod(pod) for pod in pods]
+    statuses.sort(key=lambda s: (s["index"] is None, s["index"]))
+    return statuses
+
+
+def get_job_workers(job: Job, settings: Settings) -> list[dict]:
+    """Per-worker status for the job detail view. A Running job's pods are
+    queried live; a finished job's pods have already been deleted by
+    cleanup_job, so its persisted snapshot (captured just before teardown)
+    is returned instead.
+    """
+    if job.status == JobStatus.PENDING:
+        return []
+    if job.status != JobStatus.RUNNING:
+        return job.worker_snapshot or []
+
+    try:
+        pods = list_worker_pods(job, settings)
+    except KubernetesUnavailableError:
+        return job.worker_snapshot or []
+
+    statuses = [_worker_status_from_pod(pod) for pod in pods]
+    statuses.sort(key=lambda s: (s["index"] is None, s["index"]))
+    return statuses
+
+
 def aggregate_job(job: Job) -> Path:
     output_path = Path(job.input_path).parent / "output.csv"
-    return aggregate_csv(result_paths(job), output_path)
+    paths = result_paths(job)
+    _wait_for_result_files(paths)
+    return aggregate_csv(paths, output_path)
 
 
 def cleanup_job(job: Job, settings: Settings) -> None:
@@ -165,6 +283,16 @@ def reconcile_status(db: Session, settings: Settings, job: Job) -> Job:
     if job.status != JobStatus.RUNNING:
         return job
 
+    with _lock_for(job.id):
+        db.refresh(job)
+        if job.status != JobStatus.RUNNING:
+            # Another thread already drove this job to a terminal state
+            # while we were waiting for the lock.
+            return job
+        return _reconcile_running_job(db, settings, job)
+
+
+def _reconcile_running_job(db: Session, settings: Settings, job: Job) -> Job:
     try:
         k8s_job = get_k8s_job(job, settings)
     except KubernetesUnavailableError:
@@ -180,12 +308,15 @@ def reconcile_status(db: Session, settings: Settings, job: Job) -> Job:
     complete = next((c for c in conditions if c.type == "Complete" and c.status == "True"), None)
 
     if failed is not None:
+        job.worker_snapshot = _capture_worker_snapshot(job, settings)
         job.status = JobStatus.FAILED
         job.error_message = failed.message or "One or more worker pods failed"
+        job.finished_at = _utcnow()
         db.commit()
         db.refresh(job)
         cleanup_job(job, settings)
     elif complete is not None:
+        job.worker_snapshot = _capture_worker_snapshot(job, settings)
         try:
             output_path = aggregate_job(job)
             job.result_path = str(output_path)
@@ -193,6 +324,7 @@ def reconcile_status(db: Session, settings: Settings, job: Job) -> Job:
         except AggregationError as exc:
             job.status = JobStatus.FAILED
             job.error_message = f"Aggregation failed: {exc}"
+        job.finished_at = _utcnow()
         db.commit()
         db.refresh(job)
         cleanup_job(job, settings)

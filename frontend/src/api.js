@@ -37,6 +37,11 @@ export async function listJobs() {
   return handleResponse(res)
 }
 
+export async function getJobWorkers(jobId) {
+  const res = await fetch(`${API_BASE}/api/jobs/${jobId}/workers`)
+  return handleResponse(res)
+}
+
 export function resultUrl(jobId) {
   return `${API_BASE}/api/jobs/${jobId}/result`
 }

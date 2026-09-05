@@ -1,11 +1,13 @@
+import { useState } from 'react'
 import StatusBadge from './StatusBadge'
+import JobDetailModal from './JobDetailModal'
 import { resultUrl } from '../api'
-
-function formatTime(isoString) {
-  return new Date(isoString).toLocaleTimeString()
-}
+import { formatTime, formatDuration } from '../utils/format'
 
 export default function JobList({ jobs }) {
+  const [selectedJobId, setSelectedJobId] = useState(null)
+  const selectedJob = jobs.find((job) => job.id === selectedJobId) ?? null
+
   if (jobs.length === 0) {
     return (
       <p className="empty-state rounded-xl border border-dashed border-slate-200 p-8 text-center text-sm text-slate-500 dark:border-slate-800 dark:text-slate-400">
@@ -24,12 +26,27 @@ export default function JobList({ jobs }) {
             <th className="px-4 py-3 font-medium">Rows</th>
             <th className="px-4 py-3 font-medium">Status</th>
             <th className="px-4 py-3 font-medium">Created</th>
+            <th className="px-4 py-3 font-medium">Finished</th>
+            <th className="px-4 py-3 font-medium">Duration</th>
             <th className="px-4 py-3 font-medium">Result</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
           {jobs.map((job) => (
-            <tr key={job.id} className="hover:bg-slate-50 dark:hover:bg-slate-900/60">
+            <tr
+              key={job.id}
+              onClick={() => setSelectedJobId(job.id)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  setSelectedJobId(job.id)
+                }
+              }}
+              tabIndex={0}
+              role="button"
+              aria-label={`View details for ${job.original_filename}`}
+              className="cursor-pointer hover:bg-slate-50 focus:bg-slate-50 focus:outline-none dark:hover:bg-slate-900/60 dark:focus:bg-slate-900/60"
+            >
               <td className="px-4 py-3 text-slate-900 dark:text-white">{job.original_filename}</td>
               <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{job.worker_count}</td>
               <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{job.row_count}</td>
@@ -42,11 +59,20 @@ export default function JobList({ jobs }) {
                 )}
               </td>
               <td className="px-4 py-3 text-slate-500 dark:text-slate-400">{formatTime(job.created_at)}</td>
+              <td className="px-4 py-3 text-slate-500 dark:text-slate-400">
+                {formatTime(job.finished_at) ?? <span className="text-slate-300 dark:text-slate-600">—</span>}
+              </td>
+              <td className="px-4 py-3 text-slate-500 dark:text-slate-400">
+                {formatDuration(job.created_at, job.finished_at) ?? (
+                  <span className="text-slate-300 dark:text-slate-600">—</span>
+                )}
+              </td>
               <td className="px-4 py-3">
                 {job.status === 'Completed' ? (
                   <a
                     href={resultUrl(job.id)}
                     download
+                    onClick={(e) => e.stopPropagation()}
                     className="font-medium text-indigo-600 hover:text-indigo-500 dark:text-indigo-400"
                   >
                     Download
@@ -59,6 +85,7 @@ export default function JobList({ jobs }) {
           ))}
         </tbody>
       </table>
+      {selectedJob && <JobDetailModal job={selectedJob} onClose={() => setSelectedJobId(null)} />}
     </div>
   )
 }
