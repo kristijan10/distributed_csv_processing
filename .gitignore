@@ -5,6 +5,7 @@ backend/**/__pycache__/
 backend/*.egg-info/
 backend/.env
 backend/.pytest_cache/
+worker/__pycache__/
 
 # Backend runtime storage (uploaded CSVs, chunks, results) and local DB
 backend/storage/
