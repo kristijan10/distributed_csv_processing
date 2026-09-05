@@ -23,7 +23,7 @@ def aggregate_csv(result_paths: list[Path], output_path: Path) -> Path:
             writer = csv.writer(out)
             for path in result_paths:
                 if not path.exists():
-                    raise AggregationError(f"Missing result file: {path}")
+                    raise AggregationError(f"Missing result file: {path.name}")
                 with path.open(newline="", encoding="utf-8", errors="replace") as f:
                     reader = csv.reader(f)
                     try:

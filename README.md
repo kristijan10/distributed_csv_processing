@@ -7,6 +7,31 @@ Cloud-native platform demonstrating distributed batch data processing using Dock
 - **Backend:** FastAPI (Python) — `backend/`
 - **Orchestration:** local Kubernetes via minikube (Docker driver)
 
+## Quick start (demo script)
+
+`scripts/start_demo.sh` automates everything below this section — cluster,
+storage mount, worker image, backend, frontend — in one command:
+```bash
+./scripts/start_demo.sh
+```
+It builds/loads the worker image, starts minikube and the storage mount if
+they aren't already running, waits for the backend's health check, then
+tails the backend/frontend logs in your terminal. Open http://localhost:5173
+once it prints "Demo is up".
+
+**To stop it:** press `Ctrl+C` in the terminal it's running in. This stops
+the backend, frontend, and `minikube mount` processes it started, but
+deliberately leaves the minikube cluster itself running (it's slow to
+restart, and the script didn't start it if it was already up) — run
+`minikube stop` separately if you want to tear that down too.
+
+Logs land in `.demo-logs/{backend,frontend,mount}.log` if you need to check
+something after the terminal output has scrolled past.
+
+The manual steps below are what the script automates — use them directly if
+you want to run just one piece (e.g. only the frontend against an
+already-running backend).
+
 ## Backend setup
 ```bash
 cd backend
@@ -80,6 +105,25 @@ source .venv/bin/activate
 python scripts/e2e_demo.py
 ```
 Prints PASS/FAIL per check and exits non-zero if anything failed.
+
+## Cleaning up finished jobs
+
+A `Completed`/`Failed` job's Kubernetes Job/Pods and intermediate
+`chunks/`/`results/` files are deleted automatically right after it
+finishes. Its `input.csv`, `output.csv`, and database row are kept forever
+(so `/result` keeps working) — `backend/scripts/cleanup_jobs.py` deletes
+those on demand:
+```bash
+cd backend
+source .venv/bin/activate
+python scripts/cleanup_jobs.py --dry-run          # preview, no changes
+python scripts/cleanup_jobs.py                    # all finished jobs, asks to confirm
+python scripts/cleanup_jobs.py --job-id <id> -y    # one job, no prompt
+```
+It also re-attempts deleting the job's Kubernetes Job as a safety net (in
+case the automatic cleanup failed), and never touches a job's `timings/`
+directory — `backend/scripts/worker_sweep.py` reads those for benchmark
+analysis.
 
 ## Troubleshooting
 

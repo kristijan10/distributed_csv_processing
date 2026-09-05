@@ -11,6 +11,9 @@ worker/__pycache__/
 backend/storage/
 backend/app.db
 
+# start_demo.sh log output
+.demo-logs/
+
 # Node / frontend
 frontend/node_modules/
 frontend/dist/
