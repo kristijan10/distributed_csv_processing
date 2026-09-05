@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Delete finished jobs: their DB row, input/output CSVs, and any leftover
-chunks/results directories, plus a safety-net delete of the Kubernetes Job
-in case the automatic post-reconciliation cleanup (job_service.cleanup_job)
-failed or was skipped.
+"""Delete finished or never-started jobs: their DB row, input/output CSVs,
+and any leftover chunks/results directories, plus a safety-net delete of
+the Kubernetes Job in case the automatic post-reconciliation cleanup
+(job_service.cleanup_job) failed or was skipped. Running jobs are never
+touched.
 
 timings/ is never touched - backend/scripts/worker_sweep.py reads it for
 benchmark analysis and must survive this script.
@@ -11,7 +12,7 @@ Run from backend/ with the venv active:
 
     python scripts/cleanup_jobs.py [--job-id ID ...] [--dry-run] [-y]
 
-With no --job-id, targets every job with status Completed or Failed.
+With no --job-id, targets every job with status Pending, Completed, or Failed.
 """
 
 import argparse
@@ -27,7 +28,7 @@ from app.k8s.orchestrator import KubernetesUnavailableError, get_k8s_job, delete
 from app.models.job import Job, JobStatus
 from app.services.job_service import chunks_dir, results_dir
 
-TERMINAL_STATUSES = (JobStatus.COMPLETED, JobStatus.FAILED)
+CLEANABLE_STATUSES = (JobStatus.PENDING, JobStatus.COMPLETED, JobStatus.FAILED)
 
 
 def parse_args() -> argparse.Namespace:
@@ -40,15 +41,15 @@ def parse_args() -> argparse.Namespace:
 
 def select_jobs(db, job_ids: list[str] | None) -> list[Job]:
     if not job_ids:
-        return list(db.query(Job).filter(Job.status.in_(TERMINAL_STATUSES)).order_by(Job.created_at).all())
+        return list(db.query(Job).filter(Job.status.in_(CLEANABLE_STATUSES)).order_by(Job.created_at).all())
 
     jobs = []
     for job_id in job_ids:
         job = db.get(Job, job_id)
         if job is None:
             sys.exit(f"error: no job with id {job_id}")
-        if job.status not in TERMINAL_STATUSES:
-            sys.exit(f"error: job {job_id} is not finished (status={job.status.value}), refusing to clean it up")
+        if job.status not in CLEANABLE_STATUSES:
+            sys.exit(f"error: job {job_id} is running (status={job.status.value}), refusing to clean it up")
         jobs.append(job)
     return jobs
 
@@ -102,7 +103,7 @@ def main() -> None:
     try:
         jobs = select_jobs(db, args.job_ids)
         if not jobs:
-            print("No finished jobs to clean up.")
+            print("No jobs to clean up.")
             return
 
         print(f"{'Would delete' if args.dry_run else 'Will delete'} {len(jobs)} job(s):")

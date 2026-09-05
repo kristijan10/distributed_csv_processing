@@ -106,24 +106,25 @@ python scripts/e2e_demo.py
 ```
 Prints PASS/FAIL per check and exits non-zero if anything failed.
 
-## Cleaning up finished jobs
+## Cleaning up jobs
 
 A `Completed`/`Failed` job's Kubernetes Job/Pods and intermediate
 `chunks/`/`results/` files are deleted automatically right after it
 finishes. Its `input.csv`, `output.csv`, and database row are kept forever
-(so `/result` keeps working) — `backend/scripts/cleanup_jobs.py` deletes
-those on demand:
+(so `/result` keeps working), and a `Pending` job that was created but
+never run is never cleaned up on its own — `backend/scripts/cleanup_jobs.py`
+deletes all of that on demand:
 ```bash
 cd backend
 source .venv/bin/activate
 python scripts/cleanup_jobs.py --dry-run          # preview, no changes
-python scripts/cleanup_jobs.py                    # all finished jobs, asks to confirm
+python scripts/cleanup_jobs.py                    # all Pending/Completed/Failed jobs, asks to confirm
 python scripts/cleanup_jobs.py --job-id <id> -y    # one job, no prompt
 ```
 It also re-attempts deleting the job's Kubernetes Job as a safety net (in
-case the automatic cleanup failed), and never touches a job's `timings/`
-directory — `backend/scripts/worker_sweep.py` reads those for benchmark
-analysis.
+case the automatic cleanup failed), never touches `Running` jobs, and never
+touches a job's `timings/` directory — `backend/scripts/worker_sweep.py`
+reads those for benchmark analysis.
 
 ## Troubleshooting
 
