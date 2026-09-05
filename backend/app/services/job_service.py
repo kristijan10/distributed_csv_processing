@@ -9,7 +9,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
-from app.k8s.orchestrator import JobAlreadySubmittedError, delete_k8s_job, get_k8s_job, submit_job
+from app.k8s.orchestrator import (
+    JobAlreadySubmittedError,
+    KubernetesUnavailableError,
+    delete_k8s_job,
+    get_k8s_job,
+    submit_job,
+)
 from app.models.job import Job, JobStatus
 from app.services.aggregator import AggregationError, aggregate_csv
 from app.services.partitioner import partition_csv
@@ -159,7 +165,13 @@ def reconcile_status(db: Session, settings: Settings, job: Job) -> Job:
     if job.status != JobStatus.RUNNING:
         return job
 
-    k8s_job = get_k8s_job(job, settings)
+    try:
+        k8s_job = get_k8s_job(job, settings)
+    except KubernetesUnavailableError:
+        # Don't let a temporarily-unreachable cluster break listing/reading
+        # jobs - just report the last known status until it's reachable again.
+        logger.warning("Kubernetes unreachable while checking job %s; leaving status unchanged", job.id)
+        return job
     if k8s_job is None or k8s_job.status is None:
         return job
 

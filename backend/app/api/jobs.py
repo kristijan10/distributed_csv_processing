@@ -6,6 +6,7 @@ from app.core.config import Settings, get_settings
 from app.core.db import get_db
 from app.models.job import JobStatus
 from app.schemas.job import JobRead
+from app.k8s.orchestrator import KubernetesUnavailableError
 from app.services import job_service
 from app.services.job_service import JobValidationError
 
@@ -59,6 +60,10 @@ def run_job(
         job = job_service.run_job(db, settings, job)
     except JobValidationError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except KubernetesUnavailableError as exc:
+        raise HTTPException(
+            status_code=503, detail="Could not reach the Kubernetes cluster. Is minikube running?"
+        ) from exc
     return job
 
 

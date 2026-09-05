@@ -70,7 +70,10 @@ export default function UploadForm({ onSubmit, submitting }) {
             min={1}
             max={32}
             value={workerCount}
-            onChange={(e) => setWorkerCount(parseInt(e.target.value, 10))}
+            onChange={(e) => {
+              const parsed = parseInt(e.target.value, 10)
+              setWorkerCount(Number.isNaN(parsed) ? '' : parsed)
+            }}
             disabled={submitting}
             className="w-24 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
           />

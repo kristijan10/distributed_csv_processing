@@ -4,6 +4,9 @@ cluster: upload validation, job lookup, and the guards on /run and
 """
 
 import io
+from unittest.mock import patch
+
+from app.k8s.orchestrator import KubernetesUnavailableError
 
 
 def upload(client, content: bytes, filename: str = "input.csv", worker_count: int | str = 3, content_type="text/csv"):
@@ -116,6 +119,17 @@ def test_download_before_run_returns_409(client):
     resp = client.get(f"/api/jobs/{created['id']}/result")
     assert resp.status_code == 409
     assert "status=Pending" in resp.json()["detail"]
+
+
+def test_run_returns_503_when_cluster_unreachable(client):
+    # This is the exact bug found manually: an unhandled ConfigException/
+    # connection error from the kubernetes client surfaced as a raw 500,
+    # which browsers report as a misleading CORS failure.
+    created = upload(client, b"id\n1\n2\n", worker_count=1).json()
+    with patch("app.services.job_service.submit_job", side_effect=KubernetesUnavailableError("boom")):
+        resp = client.post(f"/api/jobs/{created['id']}/run")
+    assert resp.status_code == 503
+    assert "Kubernetes cluster" in resp.json()["detail"]
 
 
 def test_list_jobs_includes_created_job(client):

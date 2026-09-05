@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from app.k8s.orchestrator import JobAlreadySubmittedError
+from app.k8s.orchestrator import JobAlreadySubmittedError, KubernetesUnavailableError
 from app.models.job import Job, JobStatus
 from app.services import job_service
 from app.services.job_service import JobValidationError
@@ -89,6 +89,20 @@ def test_run_job_translates_race_condition_cleanly(db_session, settings):
     assert job.status == JobStatus.PENDING
 
 
+def test_run_job_propagates_kubernetes_unavailable(db_session, settings):
+    # e.g. the cluster is down or the kubeconfig is broken - the caller
+    # (API layer) is responsible for turning this into a clean 503, so
+    # run_job must not swallow it, and must not have flipped the job to
+    # Running on the way.
+    job = make_job(db_session, settings)
+    with patch("app.services.job_service.submit_job", side_effect=KubernetesUnavailableError("no route to host")):
+        with pytest.raises(KubernetesUnavailableError):
+            job_service.run_job(db_session, settings, job)
+
+    db_session.refresh(job)
+    assert job.status == JobStatus.PENDING
+
+
 # --- reconcile_status ---
 
 
@@ -107,6 +121,20 @@ def test_reconcile_status_leaves_running_when_no_k8s_job_found(db_session, setti
     db_session.commit()
 
     with patch("app.services.job_service.get_k8s_job", return_value=None):
+        result = job_service.reconcile_status(db_session, settings, job)
+
+    assert result.status == JobStatus.RUNNING
+
+
+def test_reconcile_status_leaves_running_when_kubernetes_unavailable(db_session, settings):
+    # A temporarily-unreachable cluster (down, broken kubeconfig, network
+    # blip) must not break listing/reading jobs - it should just report the
+    # last known status instead of raising.
+    job = make_job(db_session, settings)
+    job.status = JobStatus.RUNNING
+    db_session.commit()
+
+    with patch("app.services.job_service.get_k8s_job", side_effect=KubernetesUnavailableError("boom")):
         result = job_service.reconcile_status(db_session, settings, job)
 
     assert result.status == JobStatus.RUNNING
