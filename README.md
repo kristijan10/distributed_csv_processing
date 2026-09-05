@@ -50,3 +50,33 @@ docker build -t batch-worker:latest worker/
 minikube image load batch-worker:latest
 ```
 Rebuild and reload after any change to `worker/main.py`.
+
+## Testing
+
+Two layers:
+
+**Unit / API tests** (`backend/tests/`) — fast, no cluster required. Cover
+the partitioner and aggregator directly, upload validation via the FastAPI
+`TestClient`, and the job lifecycle (state transitions, the double-`/run`
+race, cleanup) with the Kubernetes calls mocked out.
+```bash
+cd backend
+source .venv/bin/activate
+pip install -r requirements-dev.txt   # once
+pytest
+```
+
+**Live end-to-end demonstration** (`backend/scripts/e2e_demo.py`) — exercises
+the real stack: golden path (upload → run → Completed → download →
+cleanup), a failure path (a chunk is deleted mid-flight, forcing a pod to
+fail, verifying it resolves to `Failed` with cleanup still happening),
+every upload-validation edge case, state-transition guards (re-running a
+job, downloading before completion, unknown job ids), and concurrency
+(the double-`/run` race, several jobs running at once). Requires the full
+stack up (cluster, mount, worker image, backend):
+```bash
+cd backend
+source .venv/bin/activate
+python scripts/e2e_demo.py
+```
+Prints PASS/FAIL per check and exits non-zero if anything failed.
