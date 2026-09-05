@@ -1,30 +1,30 @@
-import { useRef, useState } from 'react'
+import { useRef, useState } from "react";
 
 export default function UploadForm({ onSubmit, submitting }) {
-  const fileInputRef = useRef(null)
-  const [file, setFile] = useState(null)
-  const [workerCount, setWorkerCount] = useState(3)
-  const [formError, setFormError] = useState(null)
+  const fileInputRef = useRef(null);
+  const [file, setFile] = useState(null);
+  const [workerCount, setWorkerCount] = useState(2);
+  const [formError, setFormError] = useState(null);
 
   async function handleSubmit(e) {
-    e.preventDefault()
-    setFormError(null)
+    e.preventDefault();
+    setFormError(null);
 
     if (!file) {
-      setFormError('Choose a CSV file first.')
-      return
+      setFormError("Choose a CSV file first.");
+      return;
     }
     if (!Number.isInteger(workerCount) || workerCount < 1) {
-      setFormError('Worker count must be a positive integer.')
-      return
+      setFormError("Worker count must be a positive integer.");
+      return;
     }
 
     try {
-      await onSubmit(file, workerCount)
-      setFile(null)
-      if (fileInputRef.current) fileInputRef.current.value = ''
+      await onSubmit(file, workerCount);
+      setFile(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
     } catch (err) {
-      setFormError(err.message)
+      setFormError(err.message);
     }
   }
 
@@ -35,7 +35,10 @@ export default function UploadForm({ onSubmit, submitting }) {
     >
       <div className="flex flex-col gap-5 sm:flex-row sm:items-end">
         <div className="flex flex-1 flex-col gap-1.5">
-          <label htmlFor="csv-file" className="text-sm font-medium text-slate-700 dark:text-slate-300">
+          <label
+            htmlFor="csv-file"
+            className="text-sm font-medium text-slate-700 dark:text-slate-300"
+          >
             CSV file
           </label>
           <div className="flex items-center gap-3">
@@ -46,7 +49,7 @@ export default function UploadForm({ onSubmit, submitting }) {
               Choose file
             </label>
             <span className="truncate text-sm text-slate-500 dark:text-slate-400">
-              {file ? file.name : 'No file chosen'}
+              {file ? file.name : "No file chosen"}
             </span>
           </div>
           <input
@@ -61,7 +64,10 @@ export default function UploadForm({ onSubmit, submitting }) {
         </div>
 
         <div className="flex flex-col gap-1.5">
-          <label htmlFor="worker-count" className="text-sm font-medium text-slate-700 dark:text-slate-300">
+          <label
+            htmlFor="worker-count"
+            className="text-sm font-medium text-slate-700 dark:text-slate-300"
+          >
             Worker count
           </label>
           <input
@@ -71,8 +77,8 @@ export default function UploadForm({ onSubmit, submitting }) {
             max={32}
             value={workerCount}
             onChange={(e) => {
-              const parsed = parseInt(e.target.value, 10)
-              setWorkerCount(Number.isNaN(parsed) ? '' : parsed)
+              const parsed = parseInt(e.target.value, 10);
+              setWorkerCount(Number.isNaN(parsed) ? "" : parsed);
             }}
             disabled={submitting}
             className="w-24 rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-800 dark:text-white"
@@ -84,11 +90,15 @@ export default function UploadForm({ onSubmit, submitting }) {
           disabled={submitting}
           className="rounded-md bg-indigo-600 px-5 py-2 text-sm font-semibold text-white transition-colors hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
         >
-          {submitting ? 'Submitting…' : 'Upload & Run'}
+          {submitting ? "Submitting…" : "Upload & Run"}
         </button>
       </div>
 
-      {formError && <p className="error-text mt-3 text-sm text-red-600 dark:text-red-400">{formError}</p>}
+      {formError && (
+        <p className="error-text mt-3 text-sm text-red-600 dark:text-red-400">
+          {formError}
+        </p>
+      )}
     </form>
-  )
+  );
 }

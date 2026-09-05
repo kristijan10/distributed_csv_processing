@@ -2,7 +2,6 @@ import { useState } from 'react'
 import StatusBadge from './StatusBadge'
 import JobDetailModal from './JobDetailModal'
 import { resultUrl } from '../api'
-import { formatTime, formatDuration } from '../utils/format'
 
 export default function JobList({ jobs }) {
   const [selectedJobId, setSelectedJobId] = useState(null)
@@ -22,12 +21,7 @@ export default function JobList({ jobs }) {
         <thead className="bg-slate-50 text-xs text-slate-500 dark:bg-slate-900 dark:text-slate-400">
           <tr>
             <th className="px-4 py-3 font-medium">File</th>
-            <th className="px-4 py-3 font-medium">Workers</th>
-            <th className="px-4 py-3 font-medium">Rows</th>
             <th className="px-4 py-3 font-medium">Status</th>
-            <th className="px-4 py-3 font-medium">Created</th>
-            <th className="px-4 py-3 font-medium">Finished</th>
-            <th className="px-4 py-3 font-medium">Duration</th>
             <th className="px-4 py-3 font-medium">Result</th>
           </tr>
         </thead>
@@ -48,23 +42,12 @@ export default function JobList({ jobs }) {
               className="cursor-pointer hover:bg-slate-50 focus:bg-slate-50 focus:outline-none dark:hover:bg-slate-900/60 dark:focus:bg-slate-900/60"
             >
               <td className="px-4 py-3 text-slate-900 dark:text-white">{job.original_filename}</td>
-              <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{job.worker_count}</td>
-              <td className="px-4 py-3 text-slate-600 dark:text-slate-300">{job.row_count}</td>
               <td className="px-4 py-3">
                 <StatusBadge status={job.status} />
                 {job.status === 'Failed' && job.error_message && (
                   <p className="error-text mt-1.5 max-w-xs text-xs text-red-600 dark:text-red-400">
                     {job.error_message}
                   </p>
-                )}
-              </td>
-              <td className="px-4 py-3 text-slate-500 dark:text-slate-400">{formatTime(job.created_at)}</td>
-              <td className="px-4 py-3 text-slate-500 dark:text-slate-400">
-                {formatTime(job.finished_at) ?? <span className="text-slate-300 dark:text-slate-600">—</span>}
-              </td>
-              <td className="px-4 py-3 text-slate-500 dark:text-slate-400">
-                {formatDuration(job.created_at, job.finished_at) ?? (
-                  <span className="text-slate-300 dark:text-slate-600">—</span>
                 )}
               </td>
               <td className="px-4 py-3">
