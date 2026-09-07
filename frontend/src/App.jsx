@@ -1,15 +1,20 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import UploadForm from './components/UploadForm'
 import JobList from './components/JobList'
 import PipelineOverview from './components/PipelineOverview'
 import { createJob, runJob, listJobs } from './api'
 
 const POLL_INTERVAL_MS = 3000
+const ACTIVE_STATUSES = new Set(['Pending', 'Running'])
 
 function App() {
   const [jobs, setJobs] = useState([])
   const [submitting, setSubmitting] = useState(false)
   const [listError, setListError] = useState(null)
+  const jobsRef = useRef(jobs)
+  useEffect(() => {
+    jobsRef.current = jobs
+  }, [jobs])
 
   const refresh = useCallback(async () => {
     try {
@@ -23,8 +28,26 @@ function App() {
 
   useEffect(() => {
     refresh()
-    const interval = setInterval(refresh, POLL_INTERVAL_MS)
-    return () => clearInterval(interval)
+
+    // Skip the network round-trip while the tab is hidden, or once every
+    // job is in a terminal state - there's nothing left that could change.
+    // A tab becoming visible again catches up immediately rather than
+    // waiting out the rest of the interval.
+    const interval = setInterval(() => {
+      if (document.visibilityState !== 'visible') return
+      if (!jobsRef.current.some((job) => ACTIVE_STATUSES.has(job.status))) return
+      refresh()
+    }, POLL_INTERVAL_MS)
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') refresh()
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+
+    return () => {
+      clearInterval(interval)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
   }, [refresh])
 
   async function handleSubmit(file, workerCount) {

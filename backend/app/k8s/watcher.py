@@ -9,13 +9,9 @@ from kubernetes.client.exceptions import ApiException
 from app.core.config import Settings
 from app.core.db import SessionLocal
 from app.k8s.client import batch_v1_api
+from app.k8s.job_builder import JOB_ID_LABEL, JOB_LABEL_SELECTOR
 
 logger = logging.getLogger(__name__)
-
-# Matches the labels build_job_manifest() puts on every Job we create -
-# scopes the watch to our own Jobs so it ignores anything else running in
-# the namespace.
-JOB_LABEL_SELECTOR = "app=batch-worker"
 
 # How long a single watch connection is allowed to stay open before the
 # apiserver closes it and _stream_events() reconnects. Bounds how long a
@@ -30,7 +26,7 @@ _RECONNECT_DELAY_SECONDS = 5
 
 def _job_id_from_k8s_job(k8s_job: Any) -> str | None:
     labels = k8s_job.metadata.labels or {}
-    return labels.get("job-id")
+    return labels.get(JOB_ID_LABEL)
 
 
 def _handle_event(settings: Settings, event: dict) -> None:

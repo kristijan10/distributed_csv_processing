@@ -3,7 +3,7 @@ from kubernetes.client.exceptions import ApiException
 
 from app.core.config import Settings
 from app.k8s.client import batch_v1_api, core_v1_api
-from app.k8s.job_builder import build_job_manifest, k8s_job_name
+from app.k8s.job_builder import JOB_ID_LABEL, JOB_LABEL_SELECTOR, build_job_manifest, k8s_job_name
 from app.models.job import Job
 
 
@@ -47,6 +47,31 @@ def get_k8s_job(job: Job, settings: Settings) -> V1Job | None:
         raise KubernetesUnavailableError(str(exc)) from exc
     except Exception as exc:
         raise KubernetesUnavailableError(str(exc)) from exc
+
+
+def list_k8s_jobs(settings: Settings) -> dict[str, V1Job]:
+    """List every Kubernetes Job we own in a single API call, keyed by our
+    job-id label. Lets a caller checking many jobs' status at once (e.g.
+    GET /api/jobs) do it with one round-trip instead of one
+    read_namespaced_job call per Running job.
+    """
+    try:
+        api = batch_v1_api()
+        k8s_jobs = api.list_namespaced_job(
+            namespace=settings.kube_namespace,
+            label_selector=JOB_LABEL_SELECTOR,
+        )
+    except ApiException as exc:
+        raise KubernetesUnavailableError(str(exc)) from exc
+    except Exception as exc:
+        raise KubernetesUnavailableError(str(exc)) from exc
+
+    result = {}
+    for k8s_job in k8s_jobs.items:
+        job_id = (k8s_job.metadata.labels or {}).get(JOB_ID_LABEL)
+        if job_id is not None:
+            result[job_id] = k8s_job
+    return result
 
 
 def list_worker_pods(job: Job, settings: Settings) -> list[V1Pod]:

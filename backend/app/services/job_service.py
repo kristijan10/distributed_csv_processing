@@ -19,6 +19,7 @@ from app.k8s.orchestrator import (
     KubernetesUnavailableError,
     delete_k8s_job,
     get_k8s_job,
+    list_k8s_jobs,
     list_worker_pods,
     submit_job,
 )
@@ -119,7 +120,7 @@ def get_job(db: Session, settings: Settings, job_id: str) -> Job | None:
 
 def list_jobs(db: Session, settings: Settings) -> list[Job]:
     jobs = list(db.scalars(select(Job).order_by(Job.created_at.desc())))
-    return [reconcile_status(db, settings, job) for job in jobs]
+    return reconcile_jobs_batch(db, settings, jobs)
 
 
 def chunks_dir(job: Job) -> Path:
@@ -135,7 +136,7 @@ def partition_job(job: Job) -> list[Path]:
     the input for worker i; the Kubernetes orchestration step hands each
     pod its corresponding chunk path.
     """
-    return partition_csv(job.input_path, chunks_dir(job), job.worker_count)
+    return partition_csv(job.input_path, chunks_dir(job), job.worker_count, row_count=job.row_count)
 
 
 def result_paths(job: Job) -> list[Path]:
@@ -290,6 +291,42 @@ def reconcile_status(db: Session, settings: Settings, job: Job) -> Job:
             # while we were waiting for the lock.
             return job
         return _reconcile_running_job(db, settings, job)
+
+
+def reconcile_jobs_batch(db: Session, settings: Settings, jobs: list[Job]) -> list[Job]:
+    """Like reconcile_status, but for a whole page of jobs at once (used by
+    list_jobs / GET /api/jobs): fetches every Kubernetes Job we own with a
+    single list_namespaced_job call instead of one read_namespaced_job call
+    per Running job, then matches results against the DB rows locally.
+    """
+    if not any(job.status == JobStatus.RUNNING for job in jobs):
+        return jobs
+
+    try:
+        k8s_jobs_by_id = list_k8s_jobs(settings)
+    except KubernetesUnavailableError:
+        logger.warning("Kubernetes unreachable while batch-reconciling jobs; leaving statuses unchanged")
+        return jobs
+
+    result = []
+    for job in jobs:
+        if job.status != JobStatus.RUNNING:
+            result.append(job)
+            continue
+
+        k8s_job = k8s_jobs_by_id.get(job.id)
+        if k8s_job is None:
+            result.append(job)
+            continue
+
+        with _lock_for(job.id):
+            db.refresh(job)
+            if job.status != JobStatus.RUNNING:
+                result.append(job)
+                continue
+            result.append(apply_k8s_job_status(db, settings, job, k8s_job))
+
+    return result
 
 
 def reconcile_from_k8s_job(db: Session, settings: Settings, job_id: str, k8s_job) -> Job | None:

@@ -232,6 +232,71 @@ def test_reconcile_status_aggregation_failure_marks_job_failed(db_session, setti
     mock_delete.assert_called_once()  # cleanup still runs even when aggregation fails
 
 
+# --- reconcile_jobs_batch ---
+
+
+def test_reconcile_jobs_batch_skips_k8s_call_when_nothing_running(db_session, settings):
+    pending = make_job(db_session, settings)  # Pending
+    with patch("app.services.job_service.list_k8s_jobs") as mock_list:
+        result = job_service.reconcile_jobs_batch(db_session, settings, [pending])
+
+    mock_list.assert_not_called()
+    assert result == [pending]
+
+
+def test_reconcile_jobs_batch_makes_one_k8s_call_for_many_running_jobs(db_session, settings):
+    running_jobs = [make_job(db_session, settings, worker_count=1) for _ in range(3)]
+    for job in running_jobs:
+        job.status = JobStatus.RUNNING
+    db_session.commit()
+
+    with patch("app.services.job_service.list_k8s_jobs", return_value={}) as mock_list:
+        job_service.reconcile_jobs_batch(db_session, settings, running_jobs)
+
+    mock_list.assert_called_once()
+
+
+def test_reconcile_jobs_batch_transitions_matching_job_to_completed(db_session, settings):
+    job = make_job(db_session, settings, worker_count=2)
+    job.status = JobStatus.RUNNING
+    db_session.commit()
+    write_results(job, rows_per_worker=2)
+
+    fake_job = make_k8s_job([make_condition("Complete")])
+    fake_pods = [make_pod(0, phase="Succeeded"), make_pod(1, phase="Succeeded")]
+    with (
+        patch("app.services.job_service.list_k8s_jobs", return_value={job.id: fake_job}),
+        patch("app.services.job_service.delete_k8s_job") as mock_delete,
+        patch("app.services.job_service.list_worker_pods", return_value=fake_pods),
+    ):
+        result = job_service.reconcile_jobs_batch(db_session, settings, [job])
+
+    assert result[0].status == JobStatus.COMPLETED
+    mock_delete.assert_called_once()
+
+
+def test_reconcile_jobs_batch_leaves_job_unmatched_in_k8s_list_unchanged(db_session, settings):
+    job = make_job(db_session, settings)
+    job.status = JobStatus.RUNNING
+    db_session.commit()
+
+    with patch("app.services.job_service.list_k8s_jobs", return_value={}):
+        result = job_service.reconcile_jobs_batch(db_session, settings, [job])
+
+    assert result[0].status == JobStatus.RUNNING
+
+
+def test_reconcile_jobs_batch_leaves_all_unchanged_when_kubernetes_unavailable(db_session, settings):
+    job = make_job(db_session, settings)
+    job.status = JobStatus.RUNNING
+    db_session.commit()
+
+    with patch("app.services.job_service.list_k8s_jobs", side_effect=KubernetesUnavailableError("boom")):
+        result = job_service.reconcile_jobs_batch(db_session, settings, [job])
+
+    assert result[0].status == JobStatus.RUNNING
+
+
 # --- get_job_workers ---
 
 

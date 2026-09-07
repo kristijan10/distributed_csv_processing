@@ -27,11 +27,17 @@ class Settings(BaseSettings):
     # `minikube mount <storage_dir>:<data_mount_path>` for local dev.
     data_mount_path: str = "/data"
 
-    # Upper bound on how long a Job may run before Kubernetes force-fails it.
-    # Without this, a Job whose pods never reach a terminal phase (e.g. stuck
-    # in ImagePullBackOff or Pending) has no Failed condition to reconcile on
-    # and stays Running forever.
-    job_active_deadline_seconds: int = 300
+    # Upper bound on how long a Job may run before Kubernetes force-fails it,
+    # computed per-job as job_deadline_base_seconds + ceil(row_count /
+    # worker_count) * job_deadline_seconds_per_row (see k8s/job_builder.py).
+    # Without a deadline at all, a Job whose pods never reach a terminal
+    # phase (e.g. stuck in ImagePullBackOff or Pending) has no Failed
+    # condition to reconcile on and stays Running forever; a flat deadline
+    # instead force-fails legitimately slow large jobs at the same threshold
+    # as a genuinely stuck tiny one, so it scales with the rows each worker
+    # has to get through.
+    job_deadline_base_seconds: int = 60
+    job_deadline_seconds_per_row: float = 0.5
 
     # Temporary experiment switch: when true, workers skip the per-row
     # transform and echo their chunk back unchanged, to isolate I/O time

@@ -95,3 +95,21 @@ def test_quoted_field_with_embedded_newline_preserved(tmp_path):
     chunks = partition_csv(csv_path, tmp_path / "chunks", worker_count=2)
     contents = "".join(_read(c) for c in chunks)
     assert "multi\nline" in contents
+
+
+def test_row_count_hint_produces_same_split_as_computed(tmp_path):
+    csv_path = make_csv(
+        tmp_path / "input.csv",
+        ["id", "name"],
+        [[i, f"row{i}"] for i in range(1, 8)],  # 7 rows
+    )
+    chunks = partition_csv(csv_path, tmp_path / "chunks", worker_count=3, row_count=7)
+    sizes = [len(_read(c).splitlines()) - 1 for c in chunks]  # minus header
+    assert sizes == [3, 2, 2]
+
+
+def test_row_count_hint_still_validates_ragged_rows(tmp_path):
+    csv_path = tmp_path / "input.csv"
+    csv_path.write_text("id,name,value\n1,Alice,10\n2,Bob\n3,Carol,30\n")
+    with pytest.raises(PartitionError, match="Row 3 has 2 columns, expected 3"):
+        partition_csv(csv_path, tmp_path / "chunks", worker_count=3, row_count=3)
