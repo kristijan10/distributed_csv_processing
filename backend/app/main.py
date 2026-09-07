@@ -1,9 +1,14 @@
+import asyncio
+import threading
+from contextlib import asynccontextmanager, suppress
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.jobs import router as jobs_router
 from app.core.config import get_settings
 from app.core.db import Base, engine
+from app.k8s.watcher import run_job_watcher
 from app.models import job as job_model  # noqa: F401  (registers the table with Base.metadata)
 
 settings = get_settings()
@@ -20,7 +25,21 @@ if settings.database_url.startswith("sqlite"):
         if "worker_snapshot" not in existing_columns:
             conn.exec_driver_sql("ALTER TABLE jobs ADD COLUMN worker_snapshot JSON")
 
-app = FastAPI(title=settings.app_name)
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    stop_event = threading.Event()
+    watcher_task = asyncio.create_task(run_job_watcher(settings, stop_event))
+    try:
+        yield
+    finally:
+        stop_event.set()
+        watcher_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await watcher_task
+
+
+app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

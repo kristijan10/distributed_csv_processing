@@ -292,6 +292,24 @@ def reconcile_status(db: Session, settings: Settings, job: Job) -> Job:
         return _reconcile_running_job(db, settings, job)
 
 
+def reconcile_from_k8s_job(db: Session, settings: Settings, job_id: str, k8s_job) -> Job | None:
+    """Entry point for app.k8s.watcher: apply a Kubernetes Job object received
+    from a watch.Watch() event to our matching Job row, if any. Takes the
+    same per-job lock as reconcile_status so a watch event racing an
+    in-flight GET /api/jobs poll for the same job can't double-apply a
+    Failed/Complete transition (double aggregation, double cleanup).
+    """
+    job = db.get(Job, job_id)
+    if job is None:
+        return None
+
+    with _lock_for(job_id):
+        db.refresh(job)
+        if job.status != JobStatus.RUNNING:
+            return job
+        return apply_k8s_job_status(db, settings, job, k8s_job)
+
+
 def _reconcile_running_job(db: Session, settings: Settings, job: Job) -> Job:
     try:
         k8s_job = get_k8s_job(job, settings)
@@ -300,7 +318,19 @@ def _reconcile_running_job(db: Session, settings: Settings, job: Job) -> Job:
         # jobs - just report the last known status until it's reachable again.
         logger.warning("Kubernetes unreachable while checking job %s; leaving status unchanged", job.id)
         return job
-    if k8s_job is None or k8s_job.status is None:
+    if k8s_job is None:
+        return job
+    return apply_k8s_job_status(db, settings, job, k8s_job)
+
+
+def apply_k8s_job_status(db: Session, settings: Settings, job: Job, k8s_job) -> Job:
+    """Advance a Running job to a terminal state from an already-fetched
+    Kubernetes Job object. Shared by the pull path above (_reconcile_running_job,
+    driven by GET /api/jobs polling) and the push path (app.k8s.watcher's
+    watch.Watch() background task, driven by Kubernetes Job events) so both
+    apply the exact same Failed/Complete handling.
+    """
+    if job.status != JobStatus.RUNNING or k8s_job.status is None:
         return job
 
     conditions = k8s_job.status.conditions or []
