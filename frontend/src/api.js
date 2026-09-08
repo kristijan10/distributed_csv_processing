@@ -46,12 +46,13 @@ export function resultUrl(jobId) {
   return `${API_BASE}/api/jobs/${jobId}/result`
 }
 
-export async function getSweepModes() {
-  const res = await fetch(`${API_BASE}/api/metrics/sweep/modes`)
+export async function getSweepRuns() {
+  const res = await fetch(`${API_BASE}/api/metrics/sweep/runs`)
   return handleResponse(res)
 }
 
-export async function getSweepMetrics(mode) {
-  const res = await fetch(`${API_BASE}/api/metrics/sweep?mode=${encodeURIComponent(mode)}`)
+export async function getSweepMetrics(mode, rowCount) {
+  const params = new URLSearchParams({ mode, row_count: String(rowCount) })
+  const res = await fetch(`${API_BASE}/api/metrics/sweep?${params}`)
   return handleResponse(res)
 }
