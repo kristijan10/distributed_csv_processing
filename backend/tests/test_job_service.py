@@ -82,11 +82,13 @@ def write_results(job, rows_per_worker=2):
 
 def test_run_job_transitions_to_running_and_partitions(db_session, settings):
     job = make_job(db_session, settings, worker_count=2, rows=4)
+    assert job.started_at is None
     with patch("app.services.job_service.submit_job") as mock_submit:
         result = job_service.run_job(db_session, settings, job)
 
     mock_submit.assert_called_once()
     assert result.status == JobStatus.RUNNING
+    assert result.started_at is not None
     chunks = list(job_service.chunks_dir(job).glob("*.csv"))
     assert len(chunks) == 2
 

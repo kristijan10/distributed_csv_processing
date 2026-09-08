@@ -46,4 +46,5 @@ class Job(Base):
 
     created_at: Mapped[datetime] = mapped_column(default=_utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(default=_utcnow, onupdate=_utcnow, nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(nullable=True, default=None)
     finished_at: Mapped[datetime | None] = mapped_column(nullable=True, default=None)

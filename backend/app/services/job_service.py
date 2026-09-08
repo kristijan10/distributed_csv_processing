@@ -271,6 +271,7 @@ def run_job(db: Session, settings: Settings, job: Job) -> Job:
         raise JobValidationError("Job is already running") from exc
 
     job.status = JobStatus.RUNNING
+    job.started_at = _utcnow()
     db.commit()
     db.refresh(job)
     return job

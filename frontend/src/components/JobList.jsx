@@ -2,7 +2,7 @@ import { useState } from 'react'
 import StatusBadge from './StatusBadge'
 import JobDetailModal from './JobDetailModal'
 import { resultUrl } from '../api'
-import { formatDuration } from '../utils/format'
+import { formatSeconds } from '../utils/format'
 
 export default function JobList({ jobs }) {
   const [selectedJobId, setSelectedJobId] = useState(null)
@@ -24,7 +24,7 @@ export default function JobList({ jobs }) {
             <th className="px-4 py-3 font-medium">File</th>
             <th className="px-4 py-3 font-medium">Status</th>
             <th className="px-4 py-3 font-medium">Workers</th>
-            <th className="px-4 py-3 font-medium">Duration</th>
+            <th className="px-4 py-3 font-medium">Execution time</th>
             <th className="px-4 py-3 font-medium">Result</th>
           </tr>
         </thead>
@@ -55,7 +55,7 @@ export default function JobList({ jobs }) {
               </td>
               <td className="px-4 py-3 text-slate-500 dark:text-slate-400">{job.worker_count}</td>
               <td className="px-4 py-3 text-slate-500 dark:text-slate-400">
-                {formatDuration(job.created_at, job.finished_at) ?? (
+                {formatSeconds(job.execution_time_s) ?? (
                   <span className="text-slate-300 dark:text-slate-600">—</span>
                 )}
               </td>

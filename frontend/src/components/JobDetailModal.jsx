@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
 import StatusBadge from './StatusBadge'
 import { getJobWorkers } from '../api'
-import { formatTime, formatDuration } from '../utils/format'
+import { formatTime, formatDuration, formatSeconds } from '../utils/format'
 
 const POLL_INTERVAL_MS = 3000
 
@@ -121,9 +121,21 @@ export default function JobDetailModal({ job, onClose }) {
             <dd className="mt-1 text-slate-700 dark:text-slate-300">{formatTime(job.finished_at) ?? '—'}</dd>
           </div>
           <div>
-            <dt className="text-xs text-slate-500 dark:text-slate-400">Duration</dt>
+            <dt className="text-xs text-slate-500 dark:text-slate-400">Queue time</dt>
             <dd className="mt-1 text-slate-700 dark:text-slate-300">
-              {formatDuration(job.created_at, job.finished_at) ?? '—'}
+              {formatSeconds(job.queue_time_s) ?? '—'}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-slate-500 dark:text-slate-400">Execution time</dt>
+            <dd className="mt-1 text-slate-700 dark:text-slate-300">
+              {formatSeconds(job.execution_time_s) ?? '—'}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-xs text-slate-500 dark:text-slate-400">Throughput</dt>
+            <dd className="mt-1 text-slate-700 dark:text-slate-300">
+              {job.throughput_rows_per_s != null ? `${job.throughput_rows_per_s.toFixed(1)} rows/s` : '—'}
             </dd>
           </div>
         </dl>
