@@ -14,7 +14,7 @@ Upload a CSV → split it into `worker_count` chunks → run one Kubernetes `Job
 - `models/job.py` — `Job` SQLAlchemy model (`id`, `status` enum Pending/Running/Completed/Failed, `worker_count`, `row_count`, `original_filename`, `input_path`, `result_path`, `error_message`, `worker_snapshot` JSON, timestamps).
 - `schemas/job.py` — Pydantic `JobRead`/`WorkerStatus` response models.
 - `core/config.py` — `Settings` (pydantic-settings, env/`.env`-overridable): `storage_dir`, `database_url`, `max_workers_per_job`, `worker_image`, `data_mount_path`, `kube_namespace`, `kube_context`, `job_deadline_base_seconds`, `job_deadline_seconds_per_row`, `noop_transform`.
-- `core/db.py` — SQLAlchemy engine/session setup.
+- `core/db.py` — SQLAlchemy engine/session setup; `sync_sqlite_schema` diffs each mapped table's columns against `PRAGMA table_info` and `ALTER TABLE ADD COLUMN`s whatever's missing (SQLite-only; other backends are a no-op), so a stale local `app.db` from before a column was added to a model self-heals on next startup instead of raising `sqlite3.OperationalError`. Raises instead of altering if a new column is `NOT NULL` with no default (unsafe to backfill blindly). Called from `main.py` right after `create_all`.
 - `services/job_service.py` — the core orchestration logic: `create_job`, `run_job`, `partition_job`, `aggregate_job`, `cleanup_job`, `reconcile_status` (single job), `reconcile_jobs_batch` (list of jobs, one K8s call), `reconcile_from_k8s_job` (watch-event entry point), `apply_k8s_job_status` (shared terminal-state transition logic used by both the poll and watch paths), `get_job_workers`.
 - `services/partitioner.py` — `partition_csv`: splits an input CSV into per-worker chunk files, streaming.
 - `services/aggregator.py` — `aggregate_csv`: streams per-worker result files into one output CSV.
@@ -50,15 +50,16 @@ Upload a CSV → split it into `worker_count` chunks → run one Kubernetes `Job
 
 ## Recently changed (this session)
 
-Working from a review of the doc `thesis-implementation-context.md §8` ("known limitations"), which flagged flat poll-on-read reconciliation and a flat `activeDeadlineSeconds`. Findings:
+Working from a pasted code review of `k8s/watcher.py` and related concurrency/testing concerns. Checked each claim against the actual code before acting:
 
-- **Already implemented, verified by reading the code** (not stale-doc claims): the watch-based push reconciliation (`k8s/watcher.py`), and streaming aggregation (`aggregator.py` already iterated `csv.reader` lazily rather than loading full files).
-- **Added this session**:
-  - `k8s/orchestrator.list_k8s_jobs` + `job_service.reconcile_jobs_batch` — batches the K8s status check for `GET /api/jobs` into one API call instead of N.
-  - `services/partitioner.py` rewritten to stream chunks row-by-row instead of `rows = list(reader)`; accepts an optional `row_count` hint (which `job_service.partition_job` now passes, since it's already known from upload-time validation) to make it a true single pass — falls back to a count-then-write two-pass when called without the hint (still O(1) memory).
-  - `k8s/job_builder._active_deadline_seconds` — `activeDeadlineSeconds` is now `job_deadline_base_seconds + ceil(rows_per_worker) * job_deadline_seconds_per_row` instead of a flat 300s, driven by two new `Settings` fields.
-  - `frontend/src/App.jsx` — polling now pauses on a hidden tab and stops once no job is Pending/Running, refreshing immediately on visibility regain.
-- `thesis-implementation-context.md` predates this session's changes and is **stale** in places (still describes "poll-on-read, not a background watcher" and the flat deadline as a live limitation) — worth a follow-up pass to reconcile with this file before using it for thesis writeup.
+- **Verified as non-issues (review was wrong, or already handled)** — worth knowing so a future review doesn't re-raise them without re-checking:
+  - **Locking**: `_lock_for` (`services/job_service.py`) is a plain `threading.Lock`, not `asyncio.Lock`. The watcher runs via `asyncio.to_thread` and FastAPI's sync routes run via `run_in_threadpool` — both are real OS threads, so `threading.Lock` is the *correct* primitive, not a bug.
+  - **Frontend polling on submit**: `App.jsx`'s `handleSubmit` calls `await refresh()` directly right after submitting a job — it does not depend on the visibility-based resume path, so a user who submits without switching tabs still sees the UI update.
+  - **DB session concurrency**: reduces to the same locking answer above — reconcile paths are already serialized by `threading.Lock`, sessions are per-call, `check_same_thread=False` is set correctly for SQLite.
+- **Fixed this session**: generalized the SQLite schema-migration guard — see the `core/db.py` entry above (`sync_sqlite_schema`). Replaces two hand-maintained `if "col" not in existing_columns` blocks in `main.py` with a generic diff, so adding a model column no longer requires remembering to add a matching guard.
+- **Confirmed still-open gap, no action taken**: `k8s/orchestrator.list_k8s_jobs` has no test against a mocked kubernetes client — see Known gaps below (unchanged from before this session).
+
+Previous session's changes (watch-based push reconciliation, batched `reconcile_jobs_batch`, streaming `partitioner.py`, proportional `activeDeadlineSeconds`, frontend polling pause/resume) are already folded into the Architecture/Request-flow sections above rather than repeated here. `thesis-implementation-context.md` predates those changes and is **stale** in places (still describes "poll-on-read, not a background watcher" and a flat deadline as live limitations) — worth a follow-up pass to reconcile with this file before using it for thesis writeup.
 
 ## Configuration (`backend/app/core/config.py`, env/`.env`-overridable)
 
@@ -66,7 +67,7 @@ Working from a review of the doc `thesis-implementation-context.md §8` ("known 
 
 ## Testing
 
-All in `backend/tests/`, run with `cd backend && python -m pytest` (venv at `backend/.venv`). Kubernetes is mocked throughout (`unittest.mock.patch` on `job_service`'s imported names) — no live cluster needed. 80 tests, all passing as of this session.
+All in `backend/tests/`, run with `cd backend && python -m pytest` (venv at `backend/.venv`). Kubernetes is mocked throughout (`unittest.mock.patch` on `job_service`'s imported names) — no live cluster needed. 82 tests, all passing as of this session.
 
 | File | Covers |
 |---|---|
@@ -74,8 +75,9 @@ All in `backend/tests/`, run with `cd backend && python -m pytest` (venv at `bac
 | `test_watcher.py` (17) | `_job_id_from_k8s_job` label parsing, `_handle_event` (incl. an end-to-end event → Completed test with no mocking of `reconcile_from_k8s_job`), `job_service.reconcile_from_k8s_job` directly (unknown id, non-Running skip, Failed transition, no double-apply when racing an already-terminal job), `_stream_events` (dispatch, early stop, one bad event doesn't abort the stream, connection error returns False), `run_job_watcher` (reconnect timing/backoff). |
 | `test_partitioner.py` (14) | Uneven-split remainder distribution, worker_count == row_count, single worker, header repeated per chunk, empty/header-only file, worker_count bounds, ragged-row error with row number, BOM stripping, quoted commas/embedded newlines, and (new) that passing an explicit `row_count` hint produces the same split and still validates ragged rows. |
 | `test_aggregator.py` (5) | Header-once merge across files, header-mismatch error, missing-file error, empty-result-file error. |
-| `test_job_builder.py` (4, new) | `_active_deadline_seconds` grows with rows-per-worker, shrinks as worker_count increases for fixed rows, never drops below the base, and `build_job_manifest` actually wires the computed value into the manifest. |
+| `test_job_builder.py` (4) | `_active_deadline_seconds` grows with rows-per-worker, shrinks as worker_count increases for fixed rows, never drops below the base, and `build_job_manifest` actually wires the computed value into the manifest. |
 | `test_upload_validation.py` (20) | `POST /api/jobs` edge cases via `TestClient`: extension checks, empty/header-only/ragged CSV, worker_count bounds, malformed multipart, etc. |
+| `test_db_schema_sync.py` (2, new) | `sync_sqlite_schema` adds missing nullable columns to a stale on-disk table (simulating a pre-`finished_at`/`worker_snapshot` `app.db`), and is a no-op when the table already matches the model. |
 
 `conftest.py` points the app at an isolated temp SQLite DB + storage dir for the whole session, and wipes all `Job` rows + `storage/jobs/` after every test (`_isolate_job_state` autouse fixture) so tests can't see each other's state. `make_csv(path, header, rows)` is the shared CSV-writing test helper.
 
