@@ -126,6 +126,61 @@ case the automatic cleanup failed), never touches `Running` jobs, and never
 touches a job's `timings/` directory — `backend/scripts/worker_sweep.py`
 reads those for benchmark analysis.
 
+## Benchmarking / worker-count sweep
+
+`backend/scripts/worker_sweep.py` measures how the pipeline scales with
+worker count: for each input file it sweeps worker counts `[1, 2, 4, 8, 10,
+12, 14, 16, 20, 24, 32]`, recording wall-clock time and the per-pod
+read/compute/write split, from which speedup and parallel efficiency vs. an
+ideal linear baseline are derived. Running it once normally (`baseline`) and
+once with workers skipping their per-row transform (`noop`) isolates I/O
+time from compute time.
+
+**1. Provide input data.** Drop one or more CSVs (a header row + uniform
+column count — any file the backend's upload validation accepts) into
+`backend/scripts/sweep_input/` (gitignored, not committed):
+```bash
+backend/scripts/sweep_input/1000000.csv
+backend/scripts/sweep_input/10000000.csv
+```
+
+**2. Run the sweep**, with the cluster/mount/worker image up (see above) and
+**no backend already running** on port 8000 — `sweep_both_modes.sh` starts
+and stops its own:
+```bash
+cd backend
+scripts/sweep_both_modes.sh
+```
+It runs `--mode baseline`, restarts the backend with `NOOP_TRANSFORM=1`, runs
+`--mode noop`, then stops the backend again — the one manual restart step
+below, automated. Start a normal backend afterward (e.g.
+`./scripts/start_demo.sh`) to keep using the app.
+
+To run one mode at a time instead (e.g. against an already-running backend):
+```bash
+cd backend
+source .venv/bin/activate
+python scripts/worker_sweep.py --mode baseline
+# restart the backend with NOOP_TRANSFORM=1, e.g.:
+#   NOOP_TRANSFORM=1 uvicorn app.main:app --reload
+# then, from another terminal:
+python scripts/worker_sweep.py --mode noop
+```
+Either way, every file found in `sweep_input/` is swept (smallest first);
+each produces its own results file at
+`backend/scripts/sweep_results/<mode>_<row_count>_sweep.csv`.
+
+**3. View the results** in the frontend's **Metrics** tab
+(http://localhost:5173) — it charts every `sweep_results/` run together
+(speedup, efficiency, wall-clock time, throughput by worker count), or read
+the CSVs directly for the raw numbers.
+
+Useful env vars (all optional): `SWEEP_INPUT_DIR` / `SWEEP_RESULTS_DIR`
+override the input/output directories, `SWEEP_WATCH_DELAY` pauses before the
+24-worker run (a cue to start an external `vmstat`/`top` watch),
+`E2E_BASE_URL` / `E2E_STORAGE_DIR` point at a non-default backend or storage
+path.
+
 ## Troubleshooting
 
 **`POST /api/jobs/{id}/run` (or any job action) returns 503 "Could not
