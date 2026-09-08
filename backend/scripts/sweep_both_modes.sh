@@ -9,6 +9,11 @@
 # It does NOT manage the cluster/mount/worker image - have those up first
 # (see README.md), and make sure nothing is already listening on :8000.
 #
+# Clears every *_sweep.csv already in sweep_results/ before sweeping, so a
+# row_count whose input file you've since removed from sweep_input/ doesn't
+# linger as a stale result (worker_sweep.py only overwrites files for a
+# row_count it actually re-sweeps - it never deletes on its own).
+#
 # Usage: cd backend && scripts/sweep_both_modes.sh
 
 set -euo pipefail
@@ -49,6 +54,12 @@ if [ ! -d .venv ]; then
 fi
 # shellcheck disable=SC1091
 source .venv/bin/activate
+
+RESULTS_DIR="${SWEEP_RESULTS_DIR:-$BACKEND_DIR/scripts/sweep_results}"
+if [ -d "$RESULTS_DIR" ] && compgen -G "$RESULTS_DIR/*_sweep.csv" >/dev/null; then
+  log "Clearing previous results in $RESULTS_DIR..."
+  rm -f "$RESULTS_DIR"/*_sweep.csv
+fi
 
 start_backend() {
   local label="$1" noop="$2"

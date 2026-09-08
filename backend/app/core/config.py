@@ -44,6 +44,16 @@ class Settings(BaseSettings):
     # from compute time in the worker-count sweep.
     noop_transform: bool = False
 
+    # Simulated per-row "work" for the baseline (non-noop) transform:
+    # workers sleep(compute_fixed_s + compute_per_row_s * rows_in_chunk)
+    # instead of a flat constant, modeling a fixed per-pod setup cost (e.g.
+    # a model/connection load) plus a cost that scales with how many rows
+    # land in that worker's chunk - so, unlike a flat sleep, compute time
+    # actually shrinks as worker_count grows and chunks get smaller. See
+    # worker/main.py.
+    compute_fixed_s: float = 0.3
+    compute_per_row_s: float = 0.000001
+
     # Where scripts/worker_sweep.py writes its {mode}_sweep.csv results, and
     # where the /api/metrics/sweep endpoints read them back from.
     sweep_results_dir: str = "./scripts/sweep_results"

@@ -43,6 +43,8 @@ def build_job_manifest(job: Job, settings: Settings) -> client.V1Job:
             ),
         ),
         client.V1EnvVar(name="NOOP_TRANSFORM", value="1" if settings.noop_transform else "0"),
+        client.V1EnvVar(name="COMPUTE_FIXED_S", value=str(settings.compute_fixed_s)),
+        client.V1EnvVar(name="COMPUTE_PER_ROW_S", value=str(settings.compute_per_row_s)),
     ]
 
     volume = client.V1Volume(

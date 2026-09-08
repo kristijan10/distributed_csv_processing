@@ -11,8 +11,11 @@ worker/__pycache__/
 backend/storage/
 backend/app.db
 
-# Large sweep input CSVs (dropped in manually, never committed)
+# Large sweep input CSVs (dropped in manually, never committed) and the
+# sweep_results/ CSVs + charts generated from them (regenerate via
+# scripts/sweep_both_modes.sh, don't commit machine-specific numbers)
 backend/scripts/sweep_input/
+backend/scripts/sweep_results/
 
 # start_demo.sh log output
 .demo-logs/

@@ -8,6 +8,8 @@ DATA_ROOT = Path(os.environ.get("DATA_ROOT", "/data"))
 JOB_ID = os.environ["JOB_ID"]
 WORKER_INDEX = int(os.environ["JOB_COMPLETION_INDEX"])
 NOOP_TRANSFORM = os.environ.get("NOOP_TRANSFORM", "0") == "1"
+COMPUTE_FIXED_S = float(os.environ.get("COMPUTE_FIXED_S", "0.3"))
+COMPUTE_PER_ROW_S = float(os.environ.get("COMPUTE_PER_ROW_S", "0.000001"))
 
 job_dir = DATA_ROOT / "jobs" / JOB_ID
 chunk_path = job_dir / "chunks" / f"chunk_{WORKER_INDEX:03d}.csv"
@@ -26,9 +28,14 @@ def process() -> None:
     t1 = time.monotonic()
 
     if not NOOP_TRANSFORM:
-        # Intentionally simple/generic row-level work - the thesis focus is the
-        # orchestration model, not the processing logic itself.
-        time.sleep(1)
+        # Simulated row-level work: a fixed per-pod cost (e.g. a model or
+        # connection load) plus a cost proportional to this chunk's row
+        # count. Unlike a flat sleep, this actually shrinks as worker_count
+        # grows and chunks get smaller - the thesis focus is the
+        # orchestration model, not the processing logic itself, but the
+        # simulated cost still needs to scale with data size to be a
+        # faithful stand-in for it.
+        time.sleep(COMPUTE_FIXED_S + COMPUTE_PER_ROW_S * len(rows))
     t2 = time.monotonic()
 
     results_dir.mkdir(parents=True, exist_ok=True)
