@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     # from compute time in the worker-count sweep.
     noop_transform: bool = False
 
+    # Where scripts/worker_sweep.py writes its {mode}_sweep.csv results, and
+    # where the /api/metrics/sweep endpoints read them back from.
+    sweep_results_dir: str = "./scripts/sweep_results"
+
     class Config:
         env_file = ".env"
 

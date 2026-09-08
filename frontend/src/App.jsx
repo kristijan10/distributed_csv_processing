@@ -2,15 +2,21 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import UploadForm from './components/UploadForm'
 import JobList from './components/JobList'
 import PipelineOverview from './components/PipelineOverview'
+import MetricsPanel from './components/MetricsPanel'
 import { createJob, runJob, listJobs } from './api'
 
 const POLL_INTERVAL_MS = 3000
 const ACTIVE_STATUSES = new Set(['Pending', 'Running'])
+const TABS = [
+  { id: 'jobs', label: 'Jobs' },
+  { id: 'metrics', label: 'Metrics' },
+]
 
 function App() {
   const [jobs, setJobs] = useState([])
   const [submitting, setSubmitting] = useState(false)
   const [listError, setListError] = useState(null)
+  const [activeTab, setActiveTab] = useState('jobs')
   const jobsRef = useRef(jobs)
   useEffect(() => {
     jobsRef.current = jobs
@@ -73,21 +79,49 @@ function App() {
         </p>
       </header>
 
-      <PipelineOverview />
+      <nav className="mb-8 flex gap-2 border-b border-slate-200 dark:border-slate-800">
+        {TABS.map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => setActiveTab(tab.id)}
+            className={`-mb-px border-b-2 px-3 py-2 text-sm font-medium ${
+              activeTab === tab.id
+                ? 'border-indigo-600 text-indigo-600 dark:border-indigo-400 dark:text-indigo-400'
+                : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
 
-      <div className="mt-8">
-        <UploadForm onSubmit={handleSubmit} submitting={submitting} />
-      </div>
+      {activeTab === 'jobs' && (
+        <>
+          <PipelineOverview />
 
-      <section className="jobs-section mt-12">
-        <h2 className="mb-4 text-lg font-semibold text-slate-900 dark:text-white">Jobs</h2>
-        {listError && (
-          <p className="error-text mb-4 text-sm text-red-600 dark:text-red-400">
-            Could not load jobs: {listError}
-          </p>
-        )}
-        <JobList jobs={jobs} />
-      </section>
+          <div className="mt-8">
+            <UploadForm onSubmit={handleSubmit} submitting={submitting} />
+          </div>
+
+          <section className="jobs-section mt-12">
+            <h2 className="mb-4 text-lg font-semibold text-slate-900 dark:text-white">Jobs</h2>
+            {listError && (
+              <p className="error-text mb-4 text-sm text-red-600 dark:text-red-400">
+                Could not load jobs: {listError}
+              </p>
+            )}
+            <JobList jobs={jobs} />
+          </section>
+        </>
+      )}
+
+      {activeTab === 'metrics' && (
+        <section className="metrics-section">
+          <h2 className="mb-4 text-lg font-semibold text-slate-900 dark:text-white">Benchmark metrics</h2>
+          <MetricsPanel />
+        </section>
+      )}
     </main>
   )
 }

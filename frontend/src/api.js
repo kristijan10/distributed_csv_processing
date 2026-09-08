@@ -45,3 +45,13 @@ export async function getJobWorkers(jobId) {
 export function resultUrl(jobId) {
   return `${API_BASE}/api/jobs/${jobId}/result`
 }
+
+export async function getSweepModes() {
+  const res = await fetch(`${API_BASE}/api/metrics/sweep/modes`)
+  return handleResponse(res)
+}
+
+export async function getSweepMetrics(mode) {
+  const res = await fetch(`${API_BASE}/api/metrics/sweep?mode=${encodeURIComponent(mode)}`)
+  return handleResponse(res)
+}

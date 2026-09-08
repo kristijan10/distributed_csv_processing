@@ -6,24 +6,16 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.jobs import router as jobs_router
+from app.api.metrics import router as metrics_router
 from app.core.config import get_settings
-from app.core.db import Base, engine
+from app.core.db import Base, engine, sync_sqlite_schema
 from app.k8s.watcher import run_job_watcher
 from app.models import job as job_model  # noqa: F401  (registers the table with Base.metadata)
 
 settings = get_settings()
 
 Base.metadata.create_all(bind=engine)
-
-# create_all() only creates missing tables, not missing columns on existing
-# ones - add columns introduced after the table already existed on disk.
-if settings.database_url.startswith("sqlite"):
-    with engine.begin() as conn:
-        existing_columns = {row[1] for row in conn.exec_driver_sql("PRAGMA table_info(jobs)")}
-        if "finished_at" not in existing_columns:
-            conn.exec_driver_sql("ALTER TABLE jobs ADD COLUMN finished_at DATETIME")
-        if "worker_snapshot" not in existing_columns:
-            conn.exec_driver_sql("ALTER TABLE jobs ADD COLUMN worker_snapshot JSON")
+sync_sqlite_schema(engine, Base.metadata)
 
 
 @asynccontextmanager
@@ -52,6 +44,7 @@ app.add_middleware(
 )
 
 app.include_router(jobs_router)
+app.include_router(metrics_router)
 
 
 @app.get("/api/health")
