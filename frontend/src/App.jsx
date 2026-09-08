@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import UploadForm from './components/UploadForm'
 import JobList from './components/JobList'
+import JobDurationChart from './components/JobDurationChart'
 import PipelineOverview from './components/PipelineOverview'
 import MetricsPanel from './components/MetricsPanel'
 import { createJob, runJob, listJobs } from './api'
@@ -112,6 +113,13 @@ function App() {
               </p>
             )}
             <JobList jobs={jobs} />
+          </section>
+
+          <section className="job-duration-section mt-12">
+            <h2 className="mb-4 text-lg font-semibold text-slate-900 dark:text-white">
+              Job duration by worker count
+            </h2>
+            <JobDurationChart jobs={jobs} />
           </section>
         </>
       )}
