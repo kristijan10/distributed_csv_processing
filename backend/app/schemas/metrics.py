@@ -1,6 +1,11 @@
 from pydantic import BaseModel
 
 
+class SweepRun(BaseModel):
+    mode: str
+    row_count: int
+
+
 class SweepPoint(BaseModel):
     worker_count: int
     row_count: int | None

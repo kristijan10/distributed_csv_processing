@@ -1,10 +1,13 @@
 import csv
+import re
 from pathlib import Path
 
 from app.core.config import Settings
-from app.schemas.metrics import SweepPoint
+from app.schemas.metrics import SweepPoint, SweepRun
 
 SWEEP_MODES = ("baseline", "noop")
+
+_SWEEP_FILE_RE = re.compile(r"^(baseline|noop)_(\d+)_sweep\.csv$")
 
 
 class SweepNotFoundError(Exception):
@@ -15,20 +18,26 @@ class SweepMissingBaselineError(Exception):
     pass
 
 
-def _sweep_path(settings: Settings, mode: str) -> Path:
-    return Path(settings.sweep_results_dir) / f"{mode}_sweep.csv"
+def _sweep_path(settings: Settings, mode: str, row_count: int) -> Path:
+    return Path(settings.sweep_results_dir) / f"{mode}_{row_count}_sweep.csv"
 
 
-def list_available_modes(settings: Settings) -> list[str]:
-    return [mode for mode in SWEEP_MODES if _sweep_path(settings, mode).is_file()]
+def list_available_runs(settings: Settings) -> list[SweepRun]:
+    runs = []
+    for path in Path(settings.sweep_results_dir).glob("*_sweep.csv"):
+        m = _SWEEP_FILE_RE.match(path.name)
+        if m:
+            runs.append(SweepRun(mode=m.group(1), row_count=int(m.group(2))))
+    runs.sort(key=lambda r: (r.mode, r.row_count))
+    return runs
 
 
-def read_sweep(settings: Settings, mode: str) -> list[SweepPoint]:
-    path = _sweep_path(settings, mode)
+def read_sweep(settings: Settings, mode: str, row_count: int) -> list[SweepPoint]:
+    path = _sweep_path(settings, mode, row_count)
     if not path.is_file():
         raise SweepNotFoundError(
-            f"No sweep results for mode={mode!r}. Run "
-            f"`python scripts/worker_sweep.py --mode {mode}` first."
+            f"No sweep results for mode={mode!r}, row_count={row_count!r}. Run "
+            f"`python scripts/worker_sweep.py --mode {mode}` with that input file first."
         )
 
     with path.open(newline="") as f:

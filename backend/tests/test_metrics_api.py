@@ -35,39 +35,43 @@ def base_row(**overrides):
     return row
 
 
-def test_sweep_modes_empty_when_no_csvs(client, settings, tmp_path, monkeypatch):
+def test_sweep_runs_empty_when_no_csvs(client, settings, tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "sweep_results_dir", str(tmp_path))
-    resp = client.get("/api/metrics/sweep/modes")
+    resp = client.get("/api/metrics/sweep/runs")
     assert resp.status_code == 200
     assert resp.json() == []
 
 
-def test_sweep_modes_lists_existing_files(client, settings, tmp_path, monkeypatch):
+def test_sweep_runs_lists_existing_files(client, settings, tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "sweep_results_dir", str(tmp_path))
-    write_sweep_csv(tmp_path / "baseline_sweep.csv", [base_row()])
+    write_sweep_csv(tmp_path / "baseline_1000_sweep.csv", [base_row()])
+    write_sweep_csv(tmp_path / "noop_5000_sweep.csv", [base_row(row_count=5000)])
 
-    resp = client.get("/api/metrics/sweep/modes")
+    resp = client.get("/api/metrics/sweep/runs")
     assert resp.status_code == 200
-    assert resp.json() == ["baseline"]
+    assert resp.json() == [
+        {"mode": "baseline", "row_count": 1000},
+        {"mode": "noop", "row_count": 5000},
+    ]
 
 
 def test_get_sweep_returns_404_when_missing(client, settings, tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "sweep_results_dir", str(tmp_path))
-    resp = client.get("/api/metrics/sweep", params={"mode": "baseline"})
+    resp = client.get("/api/metrics/sweep", params={"mode": "baseline", "row_count": 1000})
     assert resp.status_code == 404
 
 
 def test_get_sweep_computes_speedup_efficiency_and_throughput(client, settings, tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "sweep_results_dir", str(tmp_path))
     write_sweep_csv(
-        tmp_path / "baseline_sweep.csv",
+        tmp_path / "baseline_1000_sweep.csv",
         [
             base_row(worker_count=1, row_count=1000, wall_s=10.0),
             base_row(worker_count=4, row_count=1000, wall_s=4.0),
         ],
     )
 
-    resp = client.get("/api/metrics/sweep", params={"mode": "baseline"})
+    resp = client.get("/api/metrics/sweep", params={"mode": "baseline", "row_count": 1000})
     assert resp.status_code == 200
     points = resp.json()
     assert [p["worker_count"] for p in points] == [1, 4]
@@ -85,7 +89,7 @@ def test_get_sweep_computes_speedup_efficiency_and_throughput(client, settings, 
 
 def test_get_sweep_rejects_missing_baseline_row(client, settings, tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "sweep_results_dir", str(tmp_path))
-    write_sweep_csv(tmp_path / "baseline_sweep.csv", [base_row(worker_count=2, wall_s=5.0)])
+    write_sweep_csv(tmp_path / "baseline_1000_sweep.csv", [base_row(worker_count=2, wall_s=5.0)])
 
-    resp = client.get("/api/metrics/sweep", params={"mode": "baseline"})
+    resp = client.get("/api/metrics/sweep", params={"mode": "baseline", "row_count": 1000})
     assert resp.status_code == 422
