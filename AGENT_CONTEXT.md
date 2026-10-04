@@ -11,9 +11,12 @@ Upload a CSV → split it into `worker_count` chunks → run one Kubernetes `Job
 **Backend** (`backend/app/`, FastAPI + SQLAlchemy + kubernetes-client, Python 3.11):
 - `main.py` — app + CORS setup; `lifespan` starts/stops the background watch task (see below).
 - `api/jobs.py` — REST endpoints (`POST /api/jobs`, `POST /api/jobs/{id}/run`, `GET /api/jobs`, `GET /api/jobs/{id}`, `GET /api/jobs/{id}/workers`, `GET /api/jobs/{id}/result`, `GET /api/health`).
-- `models/job.py` — `Job` SQLAlchemy model (`id`, `status` enum Pending/Running/Completed/Failed, `worker_count`, `row_count`, `original_filename`, `input_path`, `result_path`, `error_message`, `worker_snapshot` JSON, timestamps).
-- `schemas/job.py` — Pydantic `JobRead`/`WorkerStatus` response models.
-- `core/config.py` — `Settings` (pydantic-settings, env/`.env`-overridable): `storage_dir`, `database_url`, `max_workers_per_job`, `worker_image`, `data_mount_path`, `kube_namespace`, `kube_context`, `job_deadline_base_seconds`, `job_deadline_seconds_per_row`, `noop_transform`.
+- `api/metrics.py` — `GET /api/metrics/sweep/runs` (lists available `(mode, row_count)` sweep result pairs), `GET /api/metrics/sweep?mode=&row_count=` (derived per-worker-count metrics for one sweep run; 404 if missing, 422 if no `worker_count=1` baseline row to key speedup off of).
+- `models/job.py` — `Job` SQLAlchemy model (`id`, `status` enum Pending/Running/Completed/Failed, `worker_count`, `row_count`, `original_filename`, `input_path`, `result_path`, `error_message`, `worker_snapshot` JSON, timestamps incl. `started_at`).
+- `schemas/job.py` — Pydantic `JobRead`/`WorkerStatus` response models; `JobRead` also computes `queue_time_s` (created→started), `execution_time_s` (started→finished), `throughput_rows_per_s` (row_count/execution_time_s).
+- `schemas/metrics.py` — `SweepRun{mode, row_count}`, `SweepPoint{worker_count, row_count, wall_s, avg/max_read_s, avg/max_compute_s, avg/max_write_s, speedup, efficiency, ideal_speedup, throughput_rows_per_s}`.
+- `services/metrics_service.py` — reads `scripts/sweep_results/{mode}_{row_count}_sweep.csv` files, derives `speedup = wall_s(worker_count=1) / wall_s`, `efficiency = speedup / worker_count`, `ideal_speedup = worker_count`, `throughput_rows_per_s = row_count / wall_s`.
+- `core/config.py` — `Settings` (pydantic-settings, env/`.env`-overridable): `storage_dir`, `database_url`, `max_workers_per_job`, `worker_image`, `data_mount_path`, `kube_namespace`, `kube_context`, `job_deadline_base_seconds`, `job_deadline_seconds_per_row`, `noop_transform`, `compute_fixed_s`, `compute_per_row_s`, `sweep_results_dir`.
 - `core/db.py` — SQLAlchemy engine/session setup; `sync_sqlite_schema` diffs each mapped table's columns against `PRAGMA table_info` and `ALTER TABLE ADD COLUMN`s whatever's missing (SQLite-only; other backends are a no-op), so a stale local `app.db` from before a column was added to a model self-heals on next startup instead of raising `sqlite3.OperationalError`. Raises instead of altering if a new column is `NOT NULL` with no default (unsafe to backfill blindly). Called from `main.py` right after `create_all`.
 - `services/job_service.py` — the core orchestration logic: `create_job`, `run_job`, `partition_job`, `aggregate_job`, `cleanup_job`, `reconcile_status` (single job), `reconcile_jobs_batch` (list of jobs, one K8s call), `reconcile_from_k8s_job` (watch-event entry point), `apply_k8s_job_status` (shared terminal-state transition logic used by both the poll and watch paths), `get_job_workers`.
 - `services/partitioner.py` — `partition_csv`: splits an input CSV into per-worker chunk files, streaming.
@@ -23,18 +26,22 @@ Upload a CSV → split it into `worker_count` chunks → run one Kubernetes `Job
 - `k8s/watcher.py` — background `asyncio` task (started in `main.py`'s lifespan) that runs `kubernetes.watch.Watch()` over our Jobs (label-selected) on a worker thread, reconnecting on drop/error, and pushes each event into `job_service.reconcile_from_k8s_job`.
 - `k8s/client.py` — kubeconfig loading + cached `batch_v1_api()`/`core_v1_api()` clients.
 
-**Worker** (`worker/main.py`): standalone script run inside each pod. Reads `JOB_ID`/`JOB_COMPLETION_INDEX`/`DATA_ROOT`/`NOOP_TRANSFORM` from env, reads its chunk, does a per-row transform (or echoes unchanged in `NOOP_TRANSFORM` mode, used for I/O-vs-compute benchmarking), writes its result + a timing JSON, fsyncs (required because storage is a `minikube mount` 9p bridge).
+**Worker** (`worker/main.py`): standalone script run inside each pod. Reads `JOB_ID`/`JOB_COMPLETION_INDEX`/`DATA_ROOT`/`NOOP_TRANSFORM`/`COMPUTE_FIXED_S`/`COMPUTE_PER_ROW_S` from env, reads its chunk, does a per-row transform costed as `sleep(compute_fixed_s + compute_per_row_s * rows_in_chunk)` (or echoes the chunk back unchanged in `NOOP_TRANSFORM` mode, used for I/O-vs-compute benchmarking), writes its result + a timing JSON (`read_s`/`compute_s`/`write_s`/`total_s`), fsyncs (required because storage is a `minikube mount` 9p bridge).
 
-**Frontend** (`frontend/src/`, React + Vite + Tailwind):
-- `App.jsx` — top-level state, polls `GET /api/jobs`.
-- `api.js` — fetch wrappers for the backend REST API.
+**Frontend** (`frontend/src/`, React + Vite + Tailwind + Recharts):
+- `App.jsx` — top-level state, polls `GET /api/jobs`, two-tab nav (Jobs / Metrics).
+- `api.js` — fetch wrappers for the backend REST API, incl. `getSweepRuns`/`getSweepMetrics`.
 - `components/UploadForm.jsx`, `JobList.jsx`, `JobDetailModal.jsx` (per-worker pod status, itself polling `GET /api/jobs/{id}/workers` every 3s while open), `StatusBadge.jsx`, `PipelineOverview.jsx` (static 5-step diagram).
+- `components/JobDurationChart.jsx` — Jobs-tab chart: execution time by worker count, grouped by `row_count`, averaged across repeated completed runs at the same worker count (real job data, not sweep-script data).
+- `components/MetricsPanel.jsx` — Metrics-tab: fetches every available sweep run and overlays them all (one series per `(mode, row_count)`) across four charts — Speedup, Efficiency (with an ideal-linear-scaling reference line at y=1), Wall-clock time, Throughput.
 - `utils/format.js` — duration/time formatting helpers.
+- `utils/chartSeries.js` — shared chart helpers: fixed categorical color palette, `mergeByWorkerCount` (pivots per-series point arrays into one array keyed by `worker_count` for Recharts).
 
 **Scripts** (`backend/scripts/`):
 - `e2e_demo.py` — black-box smoke test against a *real* running backend + minikube cluster (not part of the pytest suite).
-- `worker_sweep.py` — worker-count sweep benchmark (reads worker timing JSONs) for the I/O-vs-compute thesis experiment.
-- `cleanup_jobs.py` — deletes finished/never-run jobs' DB rows, files, and any leftover K8s Job as a safety net.
+- `worker_sweep.py` — worker-count sweep benchmark: for every CSV in `sweep_input/`, sweeps worker counts `[1,2,4,8,10,12,14,16,20,24,32]`, uploads/runs/polls each via the real HTTP API, aggregates per-pod timing JSONs, writes `sweep_results/{mode}_{row_count}_sweep.csv`. `--mode {baseline,noop}` only labels the output file — actually toggling `noop` requires restarting the backend with `NOOP_TRANSFORM=1`.
+- `sweep_both_modes.sh` — runs `worker_sweep.py --mode baseline` (the `--mode noop` half is present but currently commented out), restarting the backend with the right env between modes; checks the minikube mount is actually live (round-trips a marker file through a throwaway pod, since a dead 9p session doesn't show up as a dead process) before sweeping.
+- `cleanup_jobs.py` — deletes finished/never-run jobs' DB rows, files, and any leftover K8s Job as a safety net; never touches `timings/`, so sweep data survives.
 
 ## Request flow (current implementation)
 
@@ -59,11 +66,11 @@ Working from a pasted code review of `k8s/watcher.py` and related concurrency/te
 - **Fixed this session**: generalized the SQLite schema-migration guard — see the `core/db.py` entry above (`sync_sqlite_schema`). Replaces two hand-maintained `if "col" not in existing_columns` blocks in `main.py` with a generic diff, so adding a model column no longer requires remembering to add a matching guard.
 - **Confirmed still-open gap, no action taken**: `k8s/orchestrator.list_k8s_jobs` has no test against a mocked kubernetes client — see Known gaps below (unchanged from before this session).
 
-Previous session's changes (watch-based push reconciliation, batched `reconcile_jobs_batch`, streaming `partitioner.py`, proportional `activeDeadlineSeconds`, frontend polling pause/resume) are already folded into the Architecture/Request-flow sections above rather than repeated here. `thesis-implementation-context.md` predates those changes and is **stale** in places (still describes "poll-on-read, not a background watcher" and a flat deadline as live limitations) — worth a follow-up pass to reconcile with this file before using it for thesis writeup.
+Previous session's changes (watch-based push reconciliation, batched `reconcile_jobs_batch`, streaming `partitioner.py`, proportional `activeDeadlineSeconds`, frontend polling pause/resume) are already folded into the Architecture/Request-flow sections above rather than repeated here. `thesis-implementation-context.md` predated those changes; a documentation pass (2026-09-08) reconciled it with the current code, so both docs now agree as of commit `26575a8` (the fixed+per-row worker compute cost model).
 
 ## Configuration (`backend/app/core/config.py`, env/`.env`-overridable)
 
-`storage_dir=./storage` · `database_url=sqlite:///./app.db` · `max_workers_per_job=32` · `worker_image=batch-worker:latest` · `data_mount_path=/data` · `job_deadline_base_seconds=60` · `job_deadline_seconds_per_row=0.5` · `kube_namespace=default` · `kube_context=None` (current kubeconfig context, expected `minikube`) · `noop_transform=False` (worker benchmark switch).
+`storage_dir=./storage` · `database_url=sqlite:///./app.db` · `max_workers_per_job=32` · `worker_image=batch-worker:latest` · `data_mount_path=/data` · `job_deadline_base_seconds=60` · `job_deadline_seconds_per_row=0.5` · `kube_namespace=default` · `kube_context=None` (current kubeconfig context, expected `minikube`) · `noop_transform=False` (worker benchmark switch) · `compute_fixed_s=0.3` / `compute_per_row_s=0.000001` (simulated per-row worker compute cost, see worker/main.py) · `sweep_results_dir=./scripts/sweep_results`.
 
 ## Testing
 
@@ -85,6 +92,5 @@ Not covered by pytest (deliberately, per `e2e_demo.py`'s own docstring): real-cl
 
 ## Known gaps / things to check before relying on them
 
-- `thesis-implementation-context.md` / `thesis-project-context.md` are narrative docs from an earlier session and haven't been updated to reflect the watcher, batched reconciliation, streaming partitioner, or proportional deadline — treat their "known limitations" (§8) as partially stale rather than current fact.
 - No test directly exercises `k8s/orchestrator.list_k8s_jobs` against a mocked kubernetes client (it's covered indirectly through `job_service.reconcile_jobs_batch` tests, which mock `list_k8s_jobs` itself rather than the client underneath).
 - Frontend polling change (`App.jsx`) has no automated test (no frontend test runner is set up in this repo) — verified via `vite build` + `oxlint` only, not a browser smoke test.

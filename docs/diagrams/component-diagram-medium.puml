@@ -1,0 +1,45 @@
+@startuml component-diagram-medium
+title Distributed Batch Processing Platform \n Medium Detail Component Diagram
+
+skinparam componentStyle rectangle
+skinparam wrapWidth 200
+
+[Frontend App\n(React + Vite + Recharts,\nUpload / Jobs / Metrics UI)] as Frontend
+
+package "Backend (FastAPI, uvicorn @ localhost:8000)" {
+  [Backend API\n(jobs + metrics routers,\n/api/health)] as API
+  [Job Orchestration Service\n(job_service, partitioner, aggregator)] as JobOrch
+  [Kubernetes Integration\n(client, job_builder,\norchestrator, watcher)] as K8sIntegration
+  [Metrics Service] as MetricsSvc
+}
+
+database "SQLite DB\n(job metadata)" as DB
+folder "Filesystem Storage\n(input/chunks/results/output/timings)" as FS
+folder "Sweep Result CSVs" as SweepCSVs
+
+cloud "Kubernetes Cluster (minikube)" {
+  [Job\n(Indexed completion)\n+ Worker Pods] as K8sJobPods
+}
+
+component "Worker Image\n(worker/main.py,\nbatch-worker:latest)" as WorkerImage
+component "minikube mount\n(9p bridge)" as Mount
+
+Frontend --> API : HTTP/JSON REST\n(poll every 3s, CORS)
+
+API --> JobOrch
+API --> MetricsSvc
+
+JobOrch --> DB : job metadata &\nstatus reconciliation
+JobOrch --> FS : partition input /\naggregate results
+JobOrch --> K8sIntegration : submit job,\nreconcile status
+
+K8sIntegration --> K8sJobPods : Kubernetes API\n(submit / watch / delete)
+
+K8sJobPods --> WorkerImage : runs N pods
+
+WorkerImage --> Mount : read chunk /\nwrite result + timing
+Mount --> FS : hostPath volume
+
+MetricsSvc --> SweepCSVs : read benchmark CSVs
+
+@enduml

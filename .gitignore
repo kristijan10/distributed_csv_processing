@@ -23,6 +23,8 @@ backend/scripts/sweep_results/
 # Node / frontend
 frontend/node_modules/
 frontend/dist/
+inputs
+results
 
 # OS
 .DS_Store

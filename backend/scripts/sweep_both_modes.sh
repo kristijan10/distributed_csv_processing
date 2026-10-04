@@ -47,6 +47,34 @@ if ! kubectl get nodes >/dev/null 2>&1; then
   exit 1
 fi
 
+# `minikube mount` can go stale without exiting - e.g. the laptop sleeps, the
+# 9p session to the VM dies, but the host-side process keeps running and
+# `ps` still shows it alive. That leaves /data readable-but-empty inside the
+# cluster, so every worker pod fails immediately with a chunk-file-not-found
+# error instead of anything mount-related. A process-liveness check can't
+# catch this - only an actual write-then-read through the mount can - so
+# round-trip a marker file through it before sweeping.
+check_data_mount() {
+  local marker="mount_check_$$"
+  local token="ok-$$"
+  mkdir -p "$BACKEND_DIR/storage"
+  printf '%s' "$token" >"$BACKEND_DIR/storage/$marker"
+
+  local output
+  output=$(kubectl run "mount-check-$$" --rm -i --restart=Never --image=busybox --quiet \
+    --overrides="{\"spec\":{\"containers\":[{\"name\":\"mount-check\",\"image\":\"busybox\",\"command\":[\"cat\",\"/data/$marker\"],\"volumeMounts\":[{\"name\":\"shared-storage\",\"mountPath\":\"/data\"}]}],\"volumes\":[{\"name\":\"shared-storage\",\"hostPath\":{\"path\":\"/data\",\"type\":\"Directory\"}}],\"restartPolicy\":\"Never\"}}" \
+    2>&1) || true
+
+  rm -f "$BACKEND_DIR/storage/$marker"
+  [[ "$output" == *"$token"* ]]
+}
+
+if ! check_data_mount; then
+  echo "error: the cluster's /data doesn't see backend/storage - the minikube mount bridge is down or stale." >&2
+  echo "       Run (from backend/): minikube mount ./storage:/data   and keep it running, then retry." >&2
+  exit 1
+fi
+
 cd "$BACKEND_DIR"
 if [ ! -d .venv ]; then
   echo "error: backend/.venv not found - set it up first (see README.md's Backend setup)." >&2
@@ -81,10 +109,10 @@ log "Sweeping baseline..."
 python scripts/worker_sweep.py --mode baseline
 stop_backend
 
-start_backend noop 1
-log "Sweeping noop..."
-python scripts/worker_sweep.py --mode noop
-stop_backend
+# start_backend noop 1
+# log "Sweeping noop..."
+# python scripts/worker_sweep.py --mode noop
+# stop_backend
 
 log "Both sweeps complete - results in scripts/sweep_results/"
 log "(No backend is running now - start one normally, e.g. via ../scripts/start_demo.sh, to use the app again.)"

@@ -1,0 +1,123 @@
+@startuml component-diagram-full
+title Distributed Batch Processing Platform \n Full Component Diagram
+
+skinparam componentStyle rectangle
+skinparam wrapWidth 200
+skinparam linetype ortho
+
+package "Frontend (React + Vite + Recharts)" {
+  [App.jsx\n(tab nav, polling every 3s)] as App
+  [UploadForm.jsx] as UploadForm
+  [JobList.jsx] as JobList
+  [JobDetailModal.jsx] as JobDetailModal
+  [JobDurationChart.jsx] as JobDurationChart
+  [MetricsPanel.jsx] as MetricsPanel
+  [StatusBadge.jsx] as StatusBadge
+  [PipelineOverview.jsx] as PipelineOverview
+  [api.js\n(HTTP client)] as ApiClient
+
+  App --> UploadForm
+  App --> JobList
+  App --> JobDurationChart
+  App --> MetricsPanel
+  JobList --> JobDetailModal
+  JobList --> StatusBadge
+  UploadForm --> ApiClient
+  JobList --> ApiClient
+  JobDetailModal --> ApiClient
+  MetricsPanel --> ApiClient
+
+  note bottom of PipelineOverview
+    Implemented but not wired
+    into App.jsx (commented out)
+  end note
+}
+
+package "Backend (FastAPI, uvicorn @ localhost:8000)" {
+
+  package "API Layer" {
+    [main.py\n(CORS, lifespan, /api/health)] as MainApp
+    [api/jobs.py\n(/api/jobs*)] as JobsRouter
+    [api/metrics.py\n(/api/metrics/sweep*)] as MetricsRouter
+  }
+
+  package "Services" {
+    [job_service.py\n(lifecycle & reconciliation)] as JobService
+    [partitioner.py] as Partitioner
+    [aggregator.py] as Aggregator
+    [metrics_service.py] as MetricsService
+  }
+
+  package "Kubernetes Integration" {
+    [client.py\n(kubeconfig, API clients)] as K8sClient
+    [job_builder.py\n(V1Job manifest)] as JobBuilder
+    [orchestrator.py\n(submit/list/delete)] as Orchestrator
+    [watcher.py\n(background asyncio watch)] as Watcher
+  }
+
+  package "Data & Config" {
+    [db.py\n(SQLAlchemy engine/session)] as Db
+    [models/job.py\n(Job ORM, JobStatus)] as JobModel
+    [core/config.py\n(Settings)] as Config
+  }
+
+  MainApp --> JobsRouter
+  MainApp --> MetricsRouter
+  MainApp --> Watcher : starts in lifespan
+
+  JobsRouter --> JobService
+  MetricsRouter --> MetricsService
+
+  JobService --> Partitioner
+  JobService --> Aggregator
+  JobService --> Db
+  JobService --> Orchestrator
+  JobService --> JobBuilder
+
+  Db --> JobModel
+  Config --> JobBuilder
+  Config --> JobService : compute cost /\ndeadline settings
+
+  Orchestrator --> K8sClient
+  JobBuilder --> K8sClient
+  Watcher --> K8sClient
+  Watcher --> JobService : reconcile_from_k8s_job
+}
+
+database "SQLite\n(app.db)\njobs table" as SQLite
+folder "Filesystem Storage\nstorage/jobs/{id}/\n{input.csv, chunks/, results/, output.csv, timings/}" as Storage
+folder "Sweep Result CSVs\nscripts/sweep_results/*.csv" as SweepResults
+
+cloud "Kubernetes Cluster (minikube, docker driver)" {
+  [Kubernetes API\n(BatchV1Api / CoreV1Api)] as K8sAPI
+  [Job\n(completionMode=Indexed,\ncompletions=parallelism=worker_count)] as K8sJob
+  package "Worker Pods (N replicas)" {
+    [worker/main.py\n(batch-worker:latest)] as Worker
+  }
+}
+
+component "minikube mount\n(9p filesystem bridge)" as MountBridge
+
+' --- Frontend <-> Backend ---
+ApiClient --> JobsRouter : HTTP/JSON + multipart upload\n(poll every 3s, CORS localhost:*)
+ApiClient --> MetricsRouter : HTTP/JSON
+
+' --- Backend <-> Storage ---
+Db --> SQLite
+Partitioner --> Storage : write chunks/
+Aggregator --> Storage : read results/,\nwrite output.csv
+MetricsService --> SweepResults : read CSVs
+
+' --- Backend <-> Kubernetes ---
+K8sClient --> K8sAPI
+Orchestrator --> K8sJob : submit / get / list / delete
+Watcher --> K8sJob : watch events (push)
+JobsRouter --> JobService : GET /jobs, /jobs/{id}\n(pull reconciliation fallback)
+
+K8sJob --> Worker : schedules pods
+
+' --- Worker <-> Storage ---
+Worker --> MountBridge : read chunk /\nwrite result + timing JSON
+MountBridge --> Storage : hostPath volume\n(bridges backend/storage)
+
+@enduml
